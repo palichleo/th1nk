@@ -32,10 +32,13 @@ function createSlaveAgents({ count }) {
   });
 }
 
-function createArbiterAgent() {
+function createArbiterAgent(index = 0) {
+  const id = index === 0 ? "ARBITER" : `ARBITER-${index + 1}`;
+  const name = index === 0 ? "Arbitre" : `Arbitre ${index + 1}`;
+
   return {
-    id: "ARBITER",
-    name: "Arbitre",
+    id,
+    name,
     kind: "arbiter",
     messages: [
       {
@@ -44,6 +47,10 @@ function createArbiterAgent() {
       }
     ]
   };
+}
+
+function createArbiterAgents({ count }) {
+  return Array.from({ length: count }, (_, index) => createArbiterAgent(index));
 }
 
 function createAgentId(index) {
@@ -60,5 +67,6 @@ function createAgentId(index) {
 
 module.exports = {
   createArbiterAgent,
+  createArbiterAgents,
   createSlaveAgents
 };

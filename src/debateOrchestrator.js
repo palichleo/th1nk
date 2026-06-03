@@ -5,13 +5,18 @@ const {
   buildSlaveDebatePrompt
 } = require("./prompts");
 
-async function runDebate({ config, session, slaveAgents, arbiterAgent, ui }) {
+async function runDebate({ config, session, slaveAgents, arbiterAgent, arbiterAgents, ui }) {
+  const activeArbiters = arbiterAgents || [arbiterAgent];
   const debateState = createDebateState({
     initialRequest: session.initialRequest
   });
 
-  ui.appendDebate(formatSessionIntro({ session, slaveAgents, config }));
-  ui.appendArbiter("L'arbitre interviendra apres les tours d'agents configures.\n");
+  if (typeof ui.setSessionIntro === "function") {
+    ui.setSessionIntro(formatSessionIntro({ session, slaveAgents, activeArbiters, config }));
+  } else {
+    ui.appendDebate(formatSessionIntro({ session, slaveAgents, activeArbiters, config }));
+    ui.appendArbiter("L'arbitre interviendra apres les tours d'agents configures.\n");
+  }
 
   let globalResponseIndex = 0;
 
@@ -55,10 +60,10 @@ async function runDebate({ config, session, slaveAgents, arbiterAgent, ui }) {
           think: config.ollamaThink.slave,
           agent,
           input: prompt,
-          onToken: (token) => ui.appendDebate(token)
+          onToken: (token) => appendAgentToken(ui, agent, token)
         });
 
-        ui.appendDebate("\n");
+        appendAgentToken(ui, agent, "\n");
 
         debateState.addAgentResponse({
           agentId: agent.id,
@@ -71,14 +76,17 @@ async function runDebate({ config, session, slaveAgents, arbiterAgent, ui }) {
       }
     }
 
-    await runArbitration({
-      arbitrationIndex,
-      arbiterAgent,
-      config,
-      debateState,
-      session,
-      ui
-    });
+    for (const [arbiterIndex, activeArbiterAgent] of activeArbiters.entries()) {
+      await runArbitration({
+        arbitrationIndex,
+        arbiterAgent: activeArbiterAgent,
+        arbiterIndex,
+        config,
+        debateState,
+        session,
+        ui
+      });
+    }
   }
 
   return debateState.getStats();
@@ -87,6 +95,7 @@ async function runDebate({ config, session, slaveAgents, arbiterAgent, ui }) {
 async function runArbitration({
   arbitrationIndex,
   arbiterAgent,
+  arbiterIndex,
   config,
   debateState,
   session,
@@ -103,9 +112,9 @@ async function runArbitration({
   });
 
   ui.setStatus(
-    `Arbitrage ${arbitrationIndex}/${session.maxArbitrations} - l'arbitre synthetise...`
+    `Arbitrage ${arbitrationIndex}/${session.maxArbitrations} - ${arbiterAgent.name} synthetise...`
   );
-  ui.addArbiterHeader({ arbitrationIndex });
+  ui.addArbiterHeader({ arbitrationIndex, arbiter: arbiterAgent, arbiterIndex });
 
   const content = await askAgentStreaming({
     baseUrl: config.ollamaBaseUrl,
@@ -114,18 +123,20 @@ async function runArbitration({
     think: config.ollamaThink.arbiter,
     agent: arbiterAgent,
     input: prompt,
-    onToken: (token) => ui.appendArbiter(token)
+    onToken: (token) => appendArbiterToken(ui, arbiterAgent, token)
   });
 
-  ui.appendArbiter("\n");
+  appendArbiterToken(ui, arbiterAgent, "\n");
 
   debateState.addArbitration({
+    arbiterId: arbiterAgent.id,
+    arbiterName: arbiterAgent.name,
     arbitrationIndex,
     content
   });
 }
 
-function formatSessionIntro({ session, slaveAgents, config }) {
+function formatSessionIntro({ session, slaveAgents, activeArbiters, config }) {
   return [
     "Session multi-agent",
     "",
@@ -133,10 +144,29 @@ function formatSessionIntro({ session, slaveAgents, config }) {
     `Modele slaves : ${config.models.slave}`,
     `Modele arbitre : ${config.models.arbiter}`,
     `Agents slaves : ${slaveAgents.map((agent) => agent.name).join(", ")}`,
+    `Arbitres : ${activeArbiters.map((agent) => agent.name).join(", ")}`,
     `Tours complets avant arbitrage : ${session.agentRoundsPerArbitration}`,
     `Nombre d'arbitrages : ${session.maxArbitrations}`,
     ""
   ].join("\n");
+}
+
+function appendAgentToken(ui, agent, token) {
+  if (typeof ui.appendAgent === "function") {
+    ui.appendAgent({ agentId: agent.id, text: token });
+    return;
+  }
+
+  ui.appendDebate(token);
+}
+
+function appendArbiterToken(ui, arbiterAgent, token) {
+  if (typeof ui.appendArbiterToPanel === "function") {
+    ui.appendArbiterToPanel({ arbiterId: arbiterAgent.id, text: token });
+    return;
+  }
+
+  ui.appendArbiter(token);
 }
 
 module.exports = {

@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>th1nk - debat multi-agent</title>
+    <link rel="stylesheet" href="/app.css">
+  </head>
+  <body>
+    <main class="shell">
+      <section class="hero">
+        <div>
+          <p class="eyebrow">localhost multi-agent</p>
+          <h1>th1nk</h1>
+          <p class="subtitle">
+            Des slaves debattent en colonnes, les arbitres synthetisent en dessous.
+          </p>
+        </div>
+        <div class="status-card">
+          <span class="status-label">Etat</span>
+          <strong id="statusText">Pret.</strong>
+        </div>
+      </section>
+
+      <section class="controls" aria-label="Configuration de session">
+        <div class="counter">
+          <span>IA slaves</span>
+          <button type="button" data-action="slave-minus" aria-label="Retirer une IA slave">-</button>
+          <strong id="slaveCount">3</strong>
+          <button type="button" data-action="slave-plus" aria-label="Ajouter une IA slave">+</button>
+        </div>
+
+        <div class="counter">
+          <span>Arbitres</span>
+          <button type="button" data-action="arbiter-minus" aria-label="Retirer un arbitre">-</button>
+          <strong id="arbiterCount">1</strong>
+          <button type="button" data-action="arbiter-plus" aria-label="Ajouter un arbitre">+</button>
+        </div>
+
+        <label class="field">
+          <span>Tours avant arbitrage</span>
+          <input id="roundsInput" type="number" min="1" value="3">
+        </label>
+
+        <label class="field">
+          <span>Cycles d'arbitrage</span>
+          <input id="arbitrationsInput" type="number" min="1" value="2">
+        </label>
+
+        <button id="startButton" class="start-button" type="button">Lancer</button>
+      </section>
+
+      <section class="workspace" aria-label="Debat">
+        <div>
+          <div class="section-heading">
+            <h2>Slaves</h2>
+            <span>scroll horizontal + scroll par bloc</span>
+          </div>
+          <div id="slavePanels" class="slave-row"></div>
+        </div>
+
+        <div>
+          <div class="section-heading">
+            <h2>Arbitres</h2>
+            <span>un nouveau bloc s'ajoute en dessous avec +</span>
+          </div>
+          <div id="arbiterPanels" class="arbiter-stack"></div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="prompt-bar">
+      <label for="requestInput">Question a debattre</label>
+      <textarea id="requestInput" rows="3"></textarea>
+    </footer>
+
+    <template id="panelTemplate">
+      <article class="panel">
+        <header>
+          <div>
+            <h3></h3>
+            <p></p>
+          </div>
+          <span></span>
+        </header>
+        <pre></pre>
+      </article>
+    </template>
+
+    <script src="/app.js"></script>
+  </body>
+</html>

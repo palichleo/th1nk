@@ -8,6 +8,7 @@ const CONFIG = {
 
   sessionDefaults: {
     slaveCount: 3,
+    arbiterCount: 1,
     agentRoundsPerArbitration: 3,
     maxArbitrations: 2,
     initialRequest:
@@ -17,6 +18,8 @@ const CONFIG = {
   limits: {
     minSlaveAgents: 1,
     maxSlaveAgents: 12,
+    minArbiters: 1,
+    maxArbiters: 8,
     minRoundsPerArbitration: 1,
     maxRoundsPerArbitration: 10,
     minArbitrations: 1,
