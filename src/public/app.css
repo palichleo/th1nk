@@ -314,6 +314,39 @@
         font-family: monospace;
       }
 
+      .panel-badge {
+        width: 36px;
+        height: 36px;
+        border: 1px solid var(--accent-border);
+        background: var(--accent-soft);
+        color: var(--accent);
+        border-radius: 40px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        cursor: pointer;
+        transition: var(--transition);
+        flex: 0 0 auto;
+      }
+
+      .panel-badge:hover:not(:disabled) {
+        transform: translateY(-1px);
+        border-color: var(--accent);
+        background: #fae8df;
+      }
+
+      .panel-badge:disabled {
+        cursor: not-allowed;
+        opacity: 0.55;
+      }
+
+      .panel-badge svg {
+        width: 16px;
+        height: 16px;
+        fill: currentColor;
+        display: block;
+      }
+
       .panel pre {
         flex: 1;
         margin: 0;
@@ -398,6 +431,116 @@
         cursor: not-allowed;
       }
 
+      .agent-editor {
+        position: fixed;
+        inset: 0;
+        z-index: 20;
+        display: grid;
+        place-items: center;
+        padding: 1rem;
+      }
+
+      .agent-editor[hidden] {
+        display: none;
+      }
+
+      .agent-editor__backdrop {
+        position: absolute;
+        inset: 0;
+        background: rgba(32, 29, 27, 0.55);
+        backdrop-filter: blur(6px);
+      }
+
+      .agent-editor__dialog {
+        position: relative;
+        width: min(100%, 520px);
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: 28px;
+        box-shadow: 0 24px 80px rgba(0, 0, 0, 0.18);
+        padding: 1.25rem;
+      }
+
+      .agent-editor__header {
+        margin-bottom: 1rem;
+      }
+
+      .agent-editor__header h3 {
+        font-size: 1.4rem;
+        margin-top: 0.35rem;
+      }
+
+      .agent-editor__field {
+        display: flex;
+        flex-direction: column;
+        gap: 0.45rem;
+        margin-bottom: 1rem;
+      }
+
+      .agent-editor__field span {
+        font-size: 0.72rem;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        color: var(--text-muted);
+      }
+
+      .agent-editor__field input,
+      .agent-editor__field textarea {
+        width: 100%;
+        border: 1px solid var(--border);
+        border-radius: 18px;
+        background: var(--surface-elevated);
+        color: var(--text);
+        font: inherit;
+        padding: 0.85rem 0.95rem;
+        resize: vertical;
+      }
+
+      .agent-editor__field textarea {
+        min-height: 120px;
+      }
+
+      .agent-editor__field input:focus,
+      .agent-editor__field textarea:focus {
+        outline: none;
+        border-color: var(--accent);
+        box-shadow: var(--shadow-focus);
+      }
+
+      .agent-editor__actions {
+        display: flex;
+        justify-content: flex-end;
+        gap: 0.75rem;
+        margin-top: 1.25rem;
+      }
+
+      .agent-editor__secondary,
+      .agent-editor__primary {
+        border: none;
+        border-radius: var(--radius-button);
+        padding: 0.85rem 1.2rem;
+        font-weight: 600;
+        font-size: 0.9rem;
+        cursor: pointer;
+        transition: var(--transition);
+      }
+
+      .agent-editor__secondary {
+        background: var(--bg);
+        color: var(--text);
+      }
+
+      .agent-editor__primary {
+        background: var(--accent);
+        color: white;
+      }
+
+      .agent-editor__secondary:hover,
+      .agent-editor__primary:hover {
+        transform: scale(0.98);
+      }
+
       @media (max-width: 760px) {
         .shell {
           padding: 1.5rem 1rem;
@@ -424,6 +567,16 @@
         }
         .start-button {
           padding: 0.8rem;
+        }
+        .agent-editor__dialog {
+          padding: 1rem;
+        }
+        .agent-editor__actions {
+          flex-direction: column-reverse;
+        }
+        .agent-editor__secondary,
+        .agent-editor__primary {
+          width: 100%;
         }
       }
 

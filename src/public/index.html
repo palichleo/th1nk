@@ -8,13 +8,12 @@
   </head>
   <body>
     <main class="shell">
-      <!-- Hero sans status-card : titre + sliders -->
       <div class="hero">
         <div class="hero-left">
           <p class="eyebrow">localhost multi-agent</p>
           <h1>th1nk</h1>
           <p class="subtitle">
-            Des IA génératives debattent en colonnes, les arbitres synthetisent en dessous.
+            Des IA generatives debattent en colonnes, les arbitres synthetisent en dessous.
           </p>
         </div>
         <div class="hero-controls">
@@ -31,7 +30,6 @@
         </div>
       </div>
 
-      <!-- Workspace : slaves / arbitres -->
       <section class="workspace" aria-label="Debat">
         <div>
           <div class="section-heading">
@@ -61,11 +59,38 @@
       <footer class="prompt-bar">
         <label for="requestInput">Question a debattre</label>
         <div class="prompt-row">
-          <textarea id="requestInput" rows="2" placeholder="Exemple : Faut-il réguler l'intelligence artificielle ?"></textarea>
+          <textarea id="requestInput" rows="2" placeholder="Exemple : Faut-il reguler l'intelligence artificielle ?"></textarea>
           <button id="startButton" class="start-button" type="button">Lancer</button>
         </div>
       </footer>
     </main>
+
+    <div class="agent-editor" id="agentEditor" hidden>
+      <div class="agent-editor__backdrop" data-close-agent-editor></div>
+      <div class="agent-editor__dialog" role="dialog" aria-modal="true" aria-labelledby="agentEditorTitle">
+        <form id="agentEditorForm">
+          <div class="agent-editor__header">
+            <p class="eyebrow">Modifier le profil</p>
+            <h3 id="agentEditorTitle">Agent</h3>
+          </div>
+
+          <label class="agent-editor__field">
+            <span>Nom</span>
+            <input id="agentEditorName" type="text" autocomplete="off" maxlength="80">
+          </label>
+
+          <label class="agent-editor__field">
+            <span>Role</span>
+            <textarea id="agentEditorPersona" rows="5" maxlength="400"></textarea>
+          </label>
+
+          <div class="agent-editor__actions">
+            <button type="button" id="agentEditorCancel" class="agent-editor__secondary">Annuler</button>
+            <button type="submit" class="agent-editor__primary">Enregistrer</button>
+          </div>
+        </form>
+      </div>
+    </div>
 
     <template id="panelTemplate">
       <article class="panel">
@@ -74,7 +99,7 @@
             <h3></h3>
             <p></p>
           </div>
-          <span></span>
+          <button type="button" class="panel-badge" aria-label="Modifier le profil"></button>
         </header>
         <pre></pre>
       </article>

@@ -6,7 +6,7 @@
   "scripts": {
     "start": "node src/main.js",
     "dev": "node src/dev.js",
-    "check": "node --check src/main.js && node --check src/agents.js && node --check src/config.js && node --check src/debateOrchestrator.js && node --check src/debateState.js && node --check src/ollamaClient.js && node --check src/prompts.js && node --check src/sessionInput.js && node --check src/terminalUi.js && node --check src/webServer.js && node --check src/webUi.js",
+    "check": "node --check src/main.js && node --check src/agents.js && node --check src/config.js && node --check src/debateOrchestrator.js && node --check src/debateState.js && node --check src/ollamaClient.js && node --check src/prompts.js && node --check src/public/app.js && node --check src/sessionInput.js && node --check src/terminalUi.js && node --check src/webServer.js && node --check src/webUi.js",
     "test": "npm run check"
   },
   "keywords": [],

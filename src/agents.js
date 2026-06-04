@@ -3,7 +3,7 @@ const {
   buildSlaveSystemPrompt
 } = require("./prompts");
 
-const SLAVE_PERSONAS = [
+const DEFAULT_SLAVE_PERSONAS = [
   "architecte: propose une structure claire, modulaire et maintenable",
   "critique: cherche les failles, les hypotheses faibles et les angles morts",
   "pragmatique: simplifie les propositions et privilegie ce qui peut etre implemente",
@@ -12,20 +12,37 @@ const SLAVE_PERSONAS = [
   "optimiseur: cherche les couts inutiles, la latence, la memoire et les limites de contexte"
 ];
 
-function createSlaveAgents({ count }) {
+function createDefaultSlaveProfile(index) {
+  const id = createAgentId(index);
+
+  return {
+    id,
+    name: `Agent ${id}`,
+    persona: DEFAULT_SLAVE_PERSONAS[index % DEFAULT_SLAVE_PERSONAS.length]
+  };
+}
+
+function createDefaultSlaveProfiles({ count }) {
+  return Array.from({ length: count }, (_, index) => createDefaultSlaveProfile(index));
+}
+
+function createSlaveAgents({ count, profiles = [] }) {
   return Array.from({ length: count }, (_, index) => {
-    const id = createAgentId(index);
-    const persona = SLAVE_PERSONAS[index % SLAVE_PERSONAS.length];
+    const fallbackProfile = createDefaultSlaveProfile(index);
+    const profile = normalizeSlaveProfile(profiles[index], fallbackProfile);
 
     return {
-      id,
-      name: `Agent ${id}`,
+      id: profile.id,
+      name: profile.name,
       kind: "slave",
-      persona,
+      persona: profile.persona,
       messages: [
         {
           role: "system",
-          content: buildSlaveSystemPrompt({ id, persona })
+          content: buildSlaveSystemPrompt({
+            id: profile.id,
+            persona: profile.persona
+          })
         }
       ]
     };
@@ -65,8 +82,36 @@ function createAgentId(index) {
   return id;
 }
 
+function normalizeSlaveProfile(profile, fallbackProfile) {
+  if (!profile || typeof profile !== "object") {
+    return fallbackProfile;
+  }
+
+  const name = normalizeText(profile.name, fallbackProfile.name);
+  const persona = normalizeText(profile.persona, fallbackProfile.persona);
+
+  return {
+    id: fallbackProfile.id,
+    name,
+    persona
+  };
+}
+
+function normalizeText(value, fallback) {
+  if (typeof value !== "string") {
+    return fallback;
+  }
+
+  const trimmed = value.trim();
+
+  return trimmed || fallback;
+}
+
 module.exports = {
+  DEFAULT_SLAVE_PERSONAS,
   createArbiterAgent,
   createArbiterAgents,
+  createDefaultSlaveProfile,
+  createDefaultSlaveProfiles,
   createSlaveAgents
 };

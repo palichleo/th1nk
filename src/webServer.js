@@ -2,7 +2,11 @@ const fs = require("fs/promises");
 const http = require("http");
 const path = require("path");
 
-const { createArbiterAgents, createSlaveAgents } = require("./agents");
+const {
+  createArbiterAgents,
+  createDefaultSlaveProfiles,
+  createSlaveAgents
+} = require("./agents");
 const { runDebate } = require("./debateOrchestrator");
 const { checkOllamaModels } = require("./ollamaClient");
 const { createWebUi } = require("./webUi");
@@ -93,7 +97,10 @@ function createWebServer({ config }) {
 
     const input = await readJsonBody(request);
     const session = normalizeSession({ config, input });
-    const slaveAgents = createSlaveAgents({ count: session.slaveCount });
+    const slaveAgents = createSlaveAgents({
+      count: session.slaveCount,
+      profiles: Array.isArray(input.slaveProfiles) ? input.slaveProfiles : []
+    });
     const arbiterAgents = createArbiterAgents({ count: session.arbiterCount });
 
     currentUi = createWebUi({
@@ -200,6 +207,9 @@ async function serveStatic({ publicDir, request, response }) {
 
 function getPublicConfig(config) {
   return {
+    defaultSlaveProfiles: createDefaultSlaveProfiles({
+      count: config.limits.maxSlaveAgents
+    }),
     limits: config.limits,
     models: config.models,
     sessionDefaults: config.sessionDefaults
