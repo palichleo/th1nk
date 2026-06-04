@@ -8,53 +8,39 @@
   </head>
   <body>
     <main class="shell">
-      <section class="hero">
-        <div>
+      <!-- Hero sans status-card : titre + sliders -->
+      <div class="hero">
+        <div class="hero-left">
           <p class="eyebrow">localhost multi-agent</p>
           <h1>th1nk</h1>
           <p class="subtitle">
-            Des slaves debattent en colonnes, les arbitres synthetisent en dessous.
+            Des IA génératives debattent en colonnes, les arbitres synthetisent en dessous.
           </p>
         </div>
-        <div class="status-card">
-          <span class="status-label">Etat</span>
-          <strong id="statusText">Pret.</strong>
+        <div class="hero-controls">
+          <div class="slider-group">
+            <label>Tours avant arbitrage</label>
+            <input type="range" id="roundsSlider" min="1" max="10" value="3" step="1">
+            <span class="value" id="roundsValue">3</span>
+          </div>
+          <div class="slider-group">
+            <label>Cycles d'arbitrage</label>
+            <input type="range" id="arbitrationsSlider" min="1" max="10" value="2" step="1">
+            <span class="value" id="arbitrationsValue">2</span>
+          </div>
         </div>
-      </section>
+      </div>
 
-      <section class="controls" aria-label="Configuration de session">
-        <div class="counter">
-          <span>IA slaves</span>
-          <button type="button" data-action="slave-minus" aria-label="Retirer une IA slave">-</button>
-          <strong id="slaveCount">3</strong>
-          <button type="button" data-action="slave-plus" aria-label="Ajouter une IA slave">+</button>
-        </div>
-
-        <div class="counter">
-          <span>Arbitres</span>
-          <button type="button" data-action="arbiter-minus" aria-label="Retirer un arbitre">-</button>
-          <strong id="arbiterCount">1</strong>
-          <button type="button" data-action="arbiter-plus" aria-label="Ajouter un arbitre">+</button>
-        </div>
-
-        <label class="field">
-          <span>Tours avant arbitrage</span>
-          <input id="roundsInput" type="number" min="1" value="3">
-        </label>
-
-        <label class="field">
-          <span>Cycles d'arbitrage</span>
-          <input id="arbitrationsInput" type="number" min="1" value="2">
-        </label>
-
-        <button id="startButton" class="start-button" type="button">Lancer</button>
-      </section>
-
+      <!-- Workspace : slaves / arbitres -->
       <section class="workspace" aria-label="Debat">
         <div>
           <div class="section-heading">
             <h2>Slaves</h2>
-            <span>scroll horizontal + scroll par bloc</span>
+            <div class="inline-counter" id="slaveCounterWidget">
+              <button type="button" id="slaveMinusBtn" aria-label="Retirer une IA slave">-</button>
+              <span id="slaveCountDisplay">3</span>
+              <button type="button" id="slavePlusBtn" aria-label="Ajouter une IA slave">+</button>
+            </div>
           </div>
           <div id="slavePanels" class="slave-row"></div>
         </div>
@@ -62,17 +48,24 @@
         <div>
           <div class="section-heading">
             <h2>Arbitres</h2>
-            <span>un nouveau bloc s'ajoute en dessous avec +</span>
+            <div class="inline-counter" id="arbiterCounterWidget">
+              <button type="button" id="arbiterMinusBtn" aria-label="Retirer un arbitre">-</button>
+              <span id="arbiterCountDisplay">1</span>
+              <button type="button" id="arbiterPlusBtn" aria-label="Ajouter un arbitre">+</button>
+            </div>
           </div>
           <div id="arbiterPanels" class="arbiter-stack"></div>
         </div>
       </section>
-    </main>
 
-    <footer class="prompt-bar">
-      <label for="requestInput">Question a debattre</label>
-      <textarea id="requestInput" rows="3"></textarea>
-    </footer>
+      <footer class="prompt-bar">
+        <label for="requestInput">Question a debattre</label>
+        <div class="prompt-row">
+          <textarea id="requestInput" rows="2" placeholder="Exemple : Faut-il réguler l'intelligence artificielle ?"></textarea>
+          <button id="startButton" class="start-button" type="button">Lancer</button>
+        </div>
+      </footer>
+    </main>
 
     <template id="panelTemplate">
       <article class="panel">

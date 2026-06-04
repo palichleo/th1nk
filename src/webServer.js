@@ -52,6 +52,8 @@ function createWebServer({ config }) {
     }
   });
 
+  server.broadcastEvent = broadcastEvent;
+
   function handleEvents(request, response) {
     response.writeHead(200, {
       "Cache-Control": "no-cache",
@@ -147,6 +149,12 @@ function createWebServer({ config }) {
   }
 
   function broadcast(event) {
+    for (const client of clients) {
+      sendToClient(client, event);
+    }
+  }
+
+  function broadcastEvent(event) {
     for (const client of clients) {
       sendToClient(client, event);
     }
