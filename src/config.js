@@ -1,4 +1,7 @@
+const path = require("path");
+
 const CONFIG = {
+  dataDirectory: path.join(__dirname, "..", ".th1nk"),
   ollamaBaseUrl: "http://localhost:11434",
 
   models: {

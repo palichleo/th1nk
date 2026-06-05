@@ -1,6 +1,7 @@
-function buildSlaveSystemPrompt({ id, persona }) {
+function buildSlaveSystemPrompt({ id, name, persona }) {
   return [
-    `Tu es Agent ${id}, un petit modele participant a un debat multi-agent.`,
+    `Tu es ${name}, un petit modele participant a un debat multi-agent.`,
+    `Ton identifiant technique est ${id}.`,
     `Ton role dominant est ${persona}.`,
     "Tu ne produis pas de reponse finale pour l'utilisateur.",
     "Tu fais progresser le debat: propose, critique, compare, corrige ou precise.",
@@ -73,13 +74,15 @@ function buildSlaveDebatePrompt({
   previousState,
   currentTask,
   recentResponses,
-  agent
+  agent,
+  referenceContext
 }) {
   return [
     "Debat en cours.",
     "",
     "## Requete initiale",
     initialRequest,
+    ...formatReferenceContext(referenceContext),
     "",
     "## Etat de travail nettoye par l'arbitre",
     previousState,
@@ -91,18 +94,29 @@ function buildSlaveDebatePrompt({
     formatAgentResponses(recentResponses),
     "",
     `## Instruction pour ${agent.name}`,
+    `Comportement dominant : ${agent.persona}.`,
     "Reponds a la tache actuelle en tenant compte de l'etat et des autres agents.",
     "Ajoute une idee utile, une objection ou une correction.",
     "Ne repete pas le contexte. Ne conclus pas definitivement."
   ].join("\n");
 }
 
-function buildArbiterPrompt({ initialRequest, previousState, recentResponses }) {
+function buildArbiterPrompt({
+  arbiter,
+  initialRequest,
+  previousState,
+  recentResponses,
+  referenceContext
+}) {
   return [
     "Voici les donnees du debat a synthetiser.",
     "",
+    `## Instruction pour ${arbiter.name}`,
+    `Comportement dominant : ${arbiter.persona}.`,
+    "",
     "## Requete initiale de l'utilisateur",
     initialRequest,
+    ...formatReferenceContext(referenceContext),
     "",
     "## Etat precedent du debat",
     previousState,
@@ -112,6 +126,18 @@ function buildArbiterPrompt({ initialRequest, previousState, recentResponses }) 
     "",
     "Produis uniquement le nouvel etat de travail dans le format demande."
   ].join("\n");
+}
+
+function formatReferenceContext(referenceContext) {
+  if (typeof referenceContext !== "string" || !referenceContext.trim()) {
+    return [];
+  }
+
+  return [
+    "",
+    "## Contexte documentaire recupere",
+    referenceContext.trim()
+  ];
 }
 
 function formatAgentResponses(responses) {

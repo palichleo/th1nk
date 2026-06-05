@@ -2,13 +2,15 @@ const fs = require("fs/promises");
 const http = require("http");
 const path = require("path");
 
-const {
-  createArbiterAgents,
-  createDefaultSlaveProfiles,
-  createSlaveAgents
-} = require("./agents");
 const { runDebate } = require("./debateOrchestrator");
+const {
+  createDefaultLayers,
+  createRuntimeFromLayers,
+  normalizeLayers
+} = require("./layers");
 const { checkOllamaModels } = require("./ollamaClient");
+const { createPresetStore } = require("./presetStore");
+const { buildRetrievalContext } = require("./retrievalLayer");
 const { createWebUi } = require("./webUi");
 
 const STATIC_TYPES = {
@@ -20,29 +22,44 @@ const STATIC_TYPES = {
 function createWebServer({ config }) {
   const publicDir = path.join(__dirname, "public");
   const clients = new Set();
+  const presetStore = createPresetStore({
+    dataDirectory: config.dataDirectory
+  });
 
   let currentUi = null;
   let isRunning = false;
 
   const server = http.createServer(async (request, response) => {
     try {
-      if (request.method === "GET" && request.url === "/events") {
+      const requestUrl = new URL(request.url, "http://localhost");
+
+      if (request.method === "GET" && requestUrl.pathname === "/events") {
         handleEvents(request, response);
         return;
       }
 
-      if (request.method === "GET" && request.url === "/api/config") {
+      if (request.method === "GET" && requestUrl.pathname === "/api/config") {
         sendJson(response, 200, getPublicConfig(config));
         return;
       }
 
-      if (request.method === "POST" && request.url === "/api/start") {
+      if (request.method === "GET" && requestUrl.pathname === "/api/presets") {
+        await handlePresetList(requestUrl, response);
+        return;
+      }
+
+      if (requestUrl.pathname.startsWith("/api/presets/")) {
+        await handlePresetMutation({ request, requestUrl, response });
+        return;
+      }
+
+      if (request.method === "POST" && requestUrl.pathname === "/api/start") {
         await handleStart(request, response);
         return;
       }
 
       if (request.method === "GET") {
-        await serveStatic({ publicDir, request, response });
+        await serveStatic({ publicDir, requestUrl, response });
         return;
       }
 
@@ -50,7 +67,7 @@ function createWebServer({ config }) {
         error: "Methode non supportee."
       });
     } catch (error) {
-      sendJson(response, 500, {
+      sendJson(response, getErrorStatus(error), {
         error: error.message
       });
     }
@@ -87,6 +104,45 @@ function createWebServer({ config }) {
     });
   }
 
+  async function handlePresetList(requestUrl, response) {
+    const kind = requestUrl.searchParams.get("kind");
+    const presets = await presetStore.list(kind);
+
+    sendJson(response, 200, {
+      presets
+    });
+  }
+
+  async function handlePresetMutation({ request, requestUrl, response }) {
+    const pathParts = requestUrl.pathname
+      .split("/")
+      .filter(Boolean)
+      .map((part) => decodeURIComponent(part));
+    const kind = pathParts[2];
+    const name = pathParts[3];
+
+    if (request.method === "POST" && !name) {
+      const preset = await readJsonBody(request);
+      const savedPreset = await presetStore.save(kind, preset);
+
+      sendJson(response, 201, savedPreset);
+      return;
+    }
+
+    if (request.method === "DELETE" && name) {
+      const removed = await presetStore.remove(kind, name);
+
+      sendJson(response, removed ? 200 : 404, {
+        removed
+      });
+      return;
+    }
+
+    sendJson(response, 405, {
+      error: "Methode de preset non supportee."
+    });
+  }
+
   async function handleStart(request, response) {
     if (isRunning) {
       sendJson(response, 409, {
@@ -97,17 +153,20 @@ function createWebServer({ config }) {
 
     const input = await readJsonBody(request);
     const session = normalizeSession({ config, input });
-    const slaveAgents = createSlaveAgents({
-      count: session.slaveCount,
-      profiles: Array.isArray(input.slaveProfiles) ? input.slaveProfiles : []
+    const layers = normalizeLayers({
+      inputLayers: input.layers,
+      sessionDefaults: config.sessionDefaults
     });
-    const arbiterAgents = createArbiterAgents({ count: session.arbiterCount });
+    const runtime = createRuntimeFromLayers(layers);
+    validateRuntime(runtime);
+
+    session.slaveCount = runtime.slaveAgents.length;
+    session.arbiterCount = runtime.arbiterAgents.length;
 
     currentUi = createWebUi({
-      arbiterAgents,
+      layers,
       sendEvent: broadcast,
-      session,
-      slaveAgents
+      session
     });
     isRunning = true;
 
@@ -116,7 +175,10 @@ function createWebServer({ config }) {
       ok: true
     });
 
-    runSession({ arbiterAgents, session, slaveAgents }).catch((error) => {
+    runSession({
+      ...runtime,
+      session
+    }).catch((error) => {
       if (currentUi) {
         currentUi.appendArbiter(`\n\nERREUR :\n${error.message}\n`);
         currentUi.setStatus("Erreur detectee.");
@@ -124,8 +186,20 @@ function createWebServer({ config }) {
     });
   }
 
-  async function runSession({ arbiterAgents, session, slaveAgents }) {
+  async function runSession({
+    arbiterAgents,
+    retrievalLayers,
+    session,
+    slaveAgents
+  }) {
     try {
+      currentUi.setStatus("Preparation du contexte documentaire...");
+      const retrieval = await buildCombinedRetrievalContext({
+        dataDirectory: config.dataDirectory,
+        layers: retrievalLayers,
+        query: session.initialRequest
+      });
+
       currentUi.setStatus("Verification d'Ollama...");
 
       await checkOllamaModels({
@@ -136,13 +210,30 @@ function createWebServer({ config }) {
       const stats = await runDebate({
         arbiterAgents,
         config,
+        referenceContext: retrieval.context,
+        retrieveReferenceContext: async (query) => {
+          const nextRetrieval = await buildCombinedRetrievalContext({
+            dataDirectory: config.dataDirectory,
+            layers: retrievalLayers,
+            query
+          });
+
+          return nextRetrieval.context;
+        },
         session,
         slaveAgents,
         ui: currentUi
       });
 
+      const retrievalSummary = retrieval.chunksSelected > 0
+        ? `, ${retrieval.chunksSelected} chunks documentaires`
+        : "";
+      const retrievalWarnings = retrieval.errorCount > 0
+        ? `, ${retrieval.errorCount} avertissements retrieval`
+        : "";
+
       currentUi.setStatus(
-        `Debat termine. ${stats.agentResponseCount} reponses agents, ${stats.arbitrationCount} arbitrages.`
+        `Debat termine. ${stats.agentResponseCount} reponses agents, ${stats.arbitrationCount} arbitrages${retrievalSummary}${retrievalWarnings}.`
       );
     } finally {
       isRunning = false;
@@ -170,8 +261,38 @@ function createWebServer({ config }) {
   return server;
 }
 
-async function serveStatic({ publicDir, request, response }) {
-  const requestUrl = new URL(request.url, "http://localhost");
+async function buildCombinedRetrievalContext({ dataDirectory, layers, query }) {
+  const results = await Promise.all(
+    layers.map(async (layer) => ({
+      layer,
+      result: await buildRetrievalContext({
+        dataDirectory,
+        layer,
+        query
+      })
+    }))
+  );
+  const contexts = [];
+  let chunksSelected = 0;
+  let errorCount = 0;
+
+  for (const { layer, result } of results) {
+    chunksSelected += result.stats.chunksSelected;
+    errorCount += result.stats.errors.length;
+
+    if (result.context) {
+      contexts.push(`# ${layer.name}\n\n${result.context}`);
+    }
+  }
+
+  return {
+    chunksSelected,
+    errorCount,
+    context: contexts.join("\n\n")
+  };
+}
+
+async function serveStatic({ publicDir, requestUrl, response }) {
   const pathname = requestUrl.pathname === "/" ? "/index.html" : requestUrl.pathname;
   const normalizedPathname = path.normalize(decodeURIComponent(pathname)).replace(/^(\.\.[/\\])+/, "");
   const filePath = path.join(publicDir, normalizedPathname);
@@ -207,8 +328,9 @@ async function serveStatic({ publicDir, request, response }) {
 
 function getPublicConfig(config) {
   return {
-    defaultSlaveProfiles: createDefaultSlaveProfiles({
-      count: config.limits.maxSlaveAgents
+    defaultLayers: createDefaultLayers({
+      arbiterCount: config.sessionDefaults.arbiterCount,
+      slaveCount: config.sessionDefaults.slaveCount
     }),
     limits: config.limits,
     models: config.models,
@@ -224,12 +346,6 @@ function normalizeSession({ config, input }) {
       min: config.limits.minRoundsPerArbitration,
       value: input.agentRoundsPerArbitration
     }),
-    arbiterCount: clampInteger({
-      fallback: config.sessionDefaults.arbiterCount,
-      max: config.limits.maxArbiters,
-      min: config.limits.minArbiters,
-      value: input.arbiterCount
-    }),
     initialRequest: normalizeInitialRequest({
       fallback: config.sessionDefaults.initialRequest,
       value: input.initialRequest
@@ -239,12 +355,6 @@ function normalizeSession({ config, input }) {
       max: config.limits.maxArbitrations,
       min: config.limits.minArbitrations,
       value: input.maxArbitrations
-    }),
-    slaveCount: clampInteger({
-      fallback: config.sessionDefaults.slaveCount,
-      max: config.limits.maxSlaveAgents,
-      min: config.limits.minSlaveAgents,
-      value: input.slaveCount
     })
   };
 }
@@ -257,6 +367,20 @@ function normalizeInitialRequest({ fallback, value }) {
   const trimmed = value.trim();
 
   return trimmed || fallback;
+}
+
+function validateRuntime({ arbiterAgents, slaveAgents }) {
+  if (slaveAgents.length === 0) {
+    throw new TypeError(
+      "Ajoute au moins un bot actif dans un layer chatbots de fonction Debat."
+    );
+  }
+
+  if (arbiterAgents.length === 0) {
+    throw new TypeError(
+      "Ajoute au moins un bot actif dans un layer chatbots de fonction Arbitrage."
+    );
+  }
 }
 
 function clampInteger({ fallback, max, min, value }) {
@@ -275,7 +399,7 @@ async function readJsonBody(request) {
   for await (const chunk of request) {
     body += chunk;
 
-    if (body.length > 64 * 1024) {
+    if (body.length > 1024 * 1024) {
       throw new Error("Payload trop volumineux.");
     }
   }
@@ -285,6 +409,14 @@ async function readJsonBody(request) {
   }
 
   return JSON.parse(body);
+}
+
+function getErrorStatus(error) {
+  if (error instanceof SyntaxError || error instanceof TypeError) {
+    return 400;
+  }
+
+  return 500;
 }
 
 function sendJson(response, statusCode, payload) {

@@ -14,11 +14,14 @@ const DEFAULT_SLAVE_PERSONAS = [
 
 function createDefaultSlaveProfile(index) {
   const id = createAgentId(index);
+  const personaTemplate = DEFAULT_SLAVE_PERSONAS[index % DEFAULT_SLAVE_PERSONAS.length];
+  const { name, persona } = splitDefaultPersonaTemplate(personaTemplate, id);
 
   return {
     id,
-    name: `Agent ${id}`,
-    persona: DEFAULT_SLAVE_PERSONAS[index % DEFAULT_SLAVE_PERSONAS.length]
+    name,
+    persona,
+    systemPrompt: ""
   };
 }
 
@@ -30,44 +33,68 @@ function createSlaveAgents({ count, profiles = [] }) {
   return Array.from({ length: count }, (_, index) => {
     const fallbackProfile = createDefaultSlaveProfile(index);
     const profile = normalizeSlaveProfile(profiles[index], fallbackProfile);
+    const systemPrompt = normalizeText(
+      profile.systemPrompt,
+      buildSlaveSystemPrompt({
+        id: profile.id,
+        name: profile.name,
+        persona: profile.persona
+      })
+    );
 
     return {
       id: profile.id,
       name: profile.name,
       kind: "slave",
       persona: profile.persona,
+      systemPrompt,
       messages: [
         {
           role: "system",
-          content: buildSlaveSystemPrompt({
-            id: profile.id,
-            persona: profile.persona
-          })
+          content: systemPrompt
         }
       ]
     };
   });
 }
 
-function createArbiterAgent(index = 0) {
+function createDefaultArbiterProfile(index = 0) {
   const id = index === 0 ? "ARBITER" : `ARBITER-${index + 1}`;
   const name = index === 0 ? "Arbitre" : `Arbitre ${index + 1}`;
 
   return {
     id,
     name,
+    persona: "synthese et arbitrage",
+    systemPrompt: buildArbiterSystemPrompt()
+  };
+}
+
+function createDefaultArbiterProfiles({ count }) {
+  return Array.from({ length: count }, (_, index) => createDefaultArbiterProfile(index));
+}
+
+function createArbiterAgent(index = 0, profile) {
+  const fallbackProfile = createDefaultArbiterProfile(index);
+  const normalizedProfile = normalizeArbiterProfile(profile, fallbackProfile);
+
+  return {
+    id: normalizedProfile.id,
+    name: normalizedProfile.name,
     kind: "arbiter",
+    persona: normalizedProfile.persona,
+    systemPrompt: normalizedProfile.systemPrompt,
     messages: [
       {
         role: "system",
-        content: buildArbiterSystemPrompt()
+        content: normalizedProfile.systemPrompt
       }
     ]
   };
 }
 
-function createArbiterAgents({ count }) {
-  return Array.from({ length: count }, (_, index) => createArbiterAgent(index));
+function createArbiterAgents({ count, profiles = [] }) {
+  return Array.from({ length: count }, (_, index) => createArbiterAgent(index, profiles[index]));
 }
 
 function createAgentId(index) {
@@ -87,14 +114,117 @@ function normalizeSlaveProfile(profile, fallbackProfile) {
     return fallbackProfile;
   }
 
-  const name = normalizeText(profile.name, fallbackProfile.name);
-  const persona = normalizeText(profile.persona, fallbackProfile.persona);
+  const id = normalizeText(profile.id, fallbackProfile.id);
+  const name = normalizeSlaveName(profile.name, fallbackProfile);
+  const persona = normalizeSlavePersona(profile.persona, fallbackProfile, profile.name, name);
 
   return {
-    id: fallbackProfile.id,
+    id,
     name,
-    persona
+    persona,
+    systemPrompt: normalizeOptionalText(profile.systemPrompt)
   };
+}
+
+function normalizeArbiterProfile(profile, fallbackProfile) {
+  if (!profile || typeof profile !== "object") {
+    return fallbackProfile;
+  }
+
+  return {
+    id: normalizeText(profile.id, fallbackProfile.id),
+    name: normalizeText(profile.name, fallbackProfile.name),
+    persona: normalizeText(profile.persona, fallbackProfile.persona),
+    systemPrompt: normalizeText(profile.systemPrompt, fallbackProfile.systemPrompt)
+  };
+}
+
+function splitDefaultPersonaTemplate(template, fallbackName) {
+  if (typeof template !== "string") {
+    return {
+      name: fallbackName,
+      persona: "Role"
+    };
+  }
+
+  const separatorIndex = template.indexOf(":");
+
+  if (separatorIndex === -1) {
+    return {
+      name: formatDefaultPersonaName(template, fallbackName),
+      persona: template.trim() || "Role"
+    };
+  }
+
+  const rawName = template.slice(0, separatorIndex).trim();
+  const rawPersona = template.slice(separatorIndex + 1).trim();
+
+  return {
+    name: formatDefaultPersonaName(rawName, fallbackName),
+    persona: rawPersona || "Role"
+  };
+}
+
+function formatDefaultPersonaName(value, fallbackName) {
+  if (typeof value !== "string") {
+    return fallbackName;
+  }
+
+  const trimmed = value.trim();
+
+  if (!trimmed) {
+    return fallbackName;
+  }
+
+  return trimmed.charAt(0).toUpperCase() + trimmed.slice(1);
+}
+
+function normalizeSlaveName(value, fallbackProfile) {
+  const normalized = normalizeText(value, fallbackProfile.name);
+
+  if (normalized === `Agent ${fallbackProfile.id}`) {
+    return fallbackProfile.name;
+  }
+
+  return normalized;
+}
+
+function normalizeSlavePersona(value, fallbackProfile, rawName, normalizedName) {
+  const normalized = normalizeText(value, fallbackProfile.persona);
+
+  if (
+    isLegacySlaveName(rawName, fallbackProfile.id) &&
+    normalizedName === fallbackProfile.name &&
+    isLegacySlavePersona(normalized)
+  ) {
+    return fallbackProfile.persona;
+  }
+
+  return normalized;
+}
+
+function isLegacySlavePersona(value) {
+  if (typeof value !== "string") {
+    return false;
+  }
+
+  const trimmed = value.trim();
+
+  if (!trimmed) {
+    return false;
+  }
+
+  return DEFAULT_SLAVE_PERSONAS.some(
+    (template) => trimmed === template || trimmed.toLowerCase().startsWith(`${template.split(":")[0]}:`)
+  );
+}
+
+function isLegacySlaveName(value, id) {
+  if (typeof value !== "string") {
+    return false;
+  }
+
+  return value.trim() === `Agent ${id}`;
 }
 
 function normalizeText(value, fallback) {
@@ -107,10 +237,20 @@ function normalizeText(value, fallback) {
   return trimmed || fallback;
 }
 
+function normalizeOptionalText(value) {
+  if (typeof value !== "string") {
+    return "";
+  }
+
+  return value.trim();
+}
+
 module.exports = {
   DEFAULT_SLAVE_PERSONAS,
   createArbiterAgent,
   createArbiterAgents,
+  createDefaultArbiterProfile,
+  createDefaultArbiterProfiles,
   createDefaultSlaveProfile,
   createDefaultSlaveProfiles,
   createSlaveAgents

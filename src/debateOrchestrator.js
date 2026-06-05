@@ -5,7 +5,16 @@ const {
   buildSlaveDebatePrompt
 } = require("./prompts");
 
-async function runDebate({ config, session, slaveAgents, arbiterAgent, arbiterAgents, ui }) {
+async function runDebate({
+  config,
+  session,
+  slaveAgents,
+  arbiterAgent,
+  arbiterAgents,
+  referenceContext = "",
+  retrieveReferenceContext,
+  ui
+}) {
   const activeArbiters = arbiterAgents || [arbiterAgent];
   const debateState = createDebateState({
     initialRequest: session.initialRequest
@@ -19,6 +28,7 @@ async function runDebate({ config, session, slaveAgents, arbiterAgent, arbiterAg
   }
 
   let globalResponseIndex = 0;
+  let activeReferenceContext = referenceContext;
 
   for (
     let arbitrationIndex = 1;
@@ -30,6 +40,12 @@ async function runDebate({ config, session, slaveAgents, arbiterAgent, arbiterAg
       roundIndex <= session.agentRoundsPerArbitration;
       roundIndex++
     ) {
+      activeReferenceContext = await resolveReferenceContext({
+        fallback: activeReferenceContext,
+        query: debateState.getCurrentTask(),
+        retrieveReferenceContext
+      });
+
       for (const agent of slaveAgents) {
         globalResponseIndex++;
 
@@ -40,7 +56,8 @@ async function runDebate({ config, session, slaveAgents, arbiterAgent, arbiterAg
           recentResponses: debateState.getRecentAgentResponses(
             config.context.recentResponsesForAgents
           ),
-          agent
+          agent,
+          referenceContext: activeReferenceContext
         });
 
         ui.setStatus(
@@ -83,6 +100,7 @@ async function runDebate({ config, session, slaveAgents, arbiterAgent, arbiterAg
         arbiterIndex,
         config,
         debateState,
+        referenceContext: activeReferenceContext,
         session,
         ui
       });
@@ -98,6 +116,7 @@ async function runArbitration({
   arbiterIndex,
   config,
   debateState,
+  referenceContext,
   session,
   ui
 }) {
@@ -106,9 +125,11 @@ async function runArbitration({
   );
 
   const prompt = buildArbiterPrompt({
+    arbiter: arbiterAgent,
     initialRequest: debateState.getInitialRequest(),
     previousState: debateState.getPreviousArbitrationText(),
-    recentResponses
+    recentResponses,
+    referenceContext
   });
 
   ui.setStatus(
@@ -134,6 +155,20 @@ async function runArbitration({
     arbitrationIndex,
     content
   });
+}
+
+async function resolveReferenceContext({ fallback, query, retrieveReferenceContext }) {
+  if (typeof retrieveReferenceContext !== "function") {
+    return fallback;
+  }
+
+  const nextContext = await retrieveReferenceContext(query);
+
+  if (typeof nextContext !== "string") {
+    return fallback;
+  }
+
+  return nextContext;
 }
 
 function formatSessionIntro({ session, slaveAgents, activeArbiters, config }) {

@@ -1,17 +1,20 @@
-function createWebUi({ arbiterAgents, sendEvent, session, slaveAgents }) {
+function createWebUi({ layers, sendEvent, session }) {
   const state = {
-    arbiters: arbiterAgents.map((agent) => createPanelState(agent)),
+    layers: layers.map((layer) => createLayerState(layer)),
     session,
-    slaves: slaveAgents.map((agent) => createPanelState(agent)),
     status: "Demarrage..."
   };
 
-  function createPanelState(agent) {
+  function createLayerState(layer) {
     return {
-      id: agent.id,
-      name: agent.name,
-      persona: agent.persona || "synthese et arbitrage",
-      content: ""
+      ...layer,
+      config: {
+        ...layer.config
+      },
+      bots: layer.bots.map((bot) => ({
+        ...bot,
+        content: ""
+      }))
     };
   }
 
@@ -22,20 +25,23 @@ function createWebUi({ arbiterAgents, sendEvent, session, slaveAgents }) {
     });
   }
 
-  function appendToPanel({ collectionName, id, text }) {
-    const panel = state[collectionName].find((candidate) => candidate.id === id);
+  function appendToBot({ botId, text }) {
+    for (const layer of state.layers) {
+      const bot = layer.bots.find((candidate) => candidate.id === botId);
 
-    if (!panel) {
+      if (!bot) {
+        continue;
+      }
+
+      bot.content += text;
+
+      emit("append", {
+        id: botId,
+        layerId: layer.id,
+        text
+      });
       return;
     }
-
-    panel.content += text;
-
-    emit("append", {
-      collection: collectionName,
-      id,
-      text
-    });
   }
 
   function addAgentTurnHeader({ agent, arbitrationIndex, roundIndex, responseIndex }) {
@@ -69,23 +75,27 @@ function createWebUi({ arbiterAgents, sendEvent, session, slaveAgents }) {
   }
 
   function appendAgent({ agentId, text }) {
-    appendToPanel({
-      collectionName: "slaves",
-      id: agentId,
+    appendToBot({
+      botId: agentId,
       text
     });
   }
 
   function appendArbiterToPanel({ arbiterId, text }) {
-    appendToPanel({
-      collectionName: "arbiters",
-      id: arbiterId,
+    appendToBot({
+      botId: arbiterId,
       text
     });
   }
 
   function appendArbiter(text) {
-    const firstArbiter = state.arbiters[0];
+    const firstArbiterLayer = state.layers.find(
+      (layer) =>
+        layer.enabled &&
+        layer.type === "chatbots" &&
+        layer.config.purpose === "arbitrate"
+    );
+    const firstArbiter = firstArbiterLayer?.bots[0];
 
     if (!firstArbiter) {
       return;
@@ -117,9 +127,8 @@ function createWebUi({ arbiterAgents, sendEvent, session, slaveAgents }) {
 
   function getSnapshot() {
     return {
-      arbiters: state.arbiters,
+      layers: state.layers,
       session: state.session,
-      slaves: state.slaves,
       status: state.status
     };
   }
