@@ -38,6 +38,7 @@ async function checkOllamaModels({ baseUrl, models }) {
 
 async function askAgentStreaming({
   baseUrl,
+  debugMetadata,
   model,
   options,
   think,
@@ -61,6 +62,18 @@ async function askAgentStreaming({
     requestBody.think = think;
   }
 
+  logLlmDebug({
+    agent: formatDebugAgent(agent),
+    input,
+    messages: requestBody.messages,
+    metadata: debugMetadata || null,
+    model,
+    options,
+    think: Object.prototype.hasOwnProperty.call(requestBody, "think")
+      ? requestBody.think
+      : null
+  });
+
   let response = await postChat({ baseUrl, body: requestBody });
 
   if (!response.ok) {
@@ -68,6 +81,18 @@ async function askAgentStreaming({
 
     if (shouldRetryWithoutThink({ response, errorText, requestBody })) {
       delete requestBody.think;
+      logLlmDebug({
+        agent: formatDebugAgent(agent),
+        input,
+        messages: requestBody.messages,
+        metadata: {
+          ...(debugMetadata || {}),
+          retryReason: "think unsupported"
+        },
+        model,
+        options,
+        think: null
+      });
       response = await postChat({ baseUrl, body: requestBody });
     } else {
       throw new Error(
@@ -97,7 +122,31 @@ async function askAgentStreaming({
     content: fullAnswer
   });
 
+  logLlmOutput({
+    agent: formatDebugAgent(agent),
+    metadata: debugMetadata || null,
+    model,
+    output: fullAnswer
+  });
+
   return fullAnswer;
+}
+
+function logLlmDebug(payload) {
+  console.log(`[LLM INPUT] ${payload.agent?.name || "agent"}`, payload);
+}
+
+function logLlmOutput(payload) {
+  console.log(`[LLM OUTPUT] ${payload.agent?.name || "agent"}`, payload);
+}
+
+function formatDebugAgent(agent) {
+  return {
+    id: agent?.id || "",
+    kind: agent?.kind || "",
+    name: agent?.name || "",
+    persona: agent?.persona || ""
+  };
 }
 
 async function postChat({ baseUrl, body }) {

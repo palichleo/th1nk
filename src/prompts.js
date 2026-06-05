@@ -124,6 +124,8 @@ function buildArbiterPrompt({
     "## 9 dernieres reponses des agents",
     formatAgentResponses(recentResponses),
     "",
+    "Ne recopie aucun titre de contexte interne dans ta sortie.",
+    "N'ecris pas 'Dernieres reponses des agents', 'Reponse', 'Synthese' ou un transcript.",
     "Produis uniquement le nouvel etat de travail dans le format demande."
   ].join("\n");
 }

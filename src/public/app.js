@@ -20,9 +20,11 @@
     closeConfigButton: document.querySelector("#closeConfigButton"),
     configDialog: document.querySelector("#configDialog"),
     configToggleButton: document.querySelector("#configToggleButton"),
+    conversationScroll: document.querySelector("#conversationScroll"),
     layersWorkspace: document.querySelector("#layersWorkspace"),
+    newConversationButton: document.querySelector("#newConversationButton"),
     openPresetsButton: document.querySelector("#openPresetsButton"),
-    outputsWorkspace: document.querySelector("#outputsWorkspace"),
+    conversationWorkspace: document.querySelector("#conversationWorkspace"),
     presetNameDialog: document.querySelector("#presetNameDialog"),
     presetNameForm: document.querySelector("#presetNameForm"),
     presetNameInput: document.querySelector("#presetNameInput"),
@@ -39,8 +41,11 @@
 
   const state = {
     config: null,
+    conversation: null,
+    conversationNodes: null,
+    finalAnswerText: "",
     layers: [],
-    outputPanels: new Map(),
+    reasoningBlocks: new Map(),
     pendingPreset: null,
     presetKind: "layers",
     presetTargetLayerId: null,
@@ -62,7 +67,7 @@
       applySessionDefaults();
       state.layers = loadWorkspaceLayers();
       renderLayers();
-      renderOutputPreview();
+      renderConversationPreview();
       connectEvents();
       setStatus("Prêt.");
     } catch (error) {
@@ -81,7 +86,9 @@
       persistWorkspace();
     });
     elements.requestInput.addEventListener("input", persistWorkspace);
+    elements.requestInput.addEventListener("keydown", handleComposerKeydown);
     elements.startButton.addEventListener("click", startSession);
+    elements.newConversationButton.addEventListener("click", startNewConversation);
     elements.addChatbotsLayerButton.addEventListener("click", () => addLayer("chatbots"));
     elements.addRetrievalLayerButton.addEventListener("click", () => addLayer("retrieval"));
     elements.resetWorkspaceButton.addEventListener("click", resetWorkspace);
@@ -255,7 +262,7 @@
     state.layers.push(layer);
     persistWorkspace();
     renderLayers();
-    renderOutputPreview();
+    renderConversationPreview();
   }
 
   function createLayer(type) {
@@ -309,12 +316,12 @@
       card.querySelector(".layer-index").textContent = String(index + 1).padStart(2, "0");
       bindTextInput(card.querySelector(".layer-name"), layer.name, (value) => {
         layer.name = normalizeText(value, layer.name);
-        renderOutputPreview();
+        renderConversationPreview();
       });
       bindCheckbox(card.querySelector(".layer-enabled"), layer.enabled, (value) => {
         layer.enabled = value;
         card.classList.toggle("is-disabled", !value);
-        renderOutputPreview();
+        renderConversationPreview();
       });
       card.classList.toggle("is-disabled", !layer.enabled);
 
@@ -351,13 +358,13 @@
     purpose.addEventListener("change", () => {
       layer.config.purpose = purpose.value === "arbitrate" ? "arbitrate" : "debate";
       persistWorkspace();
-      renderOutputPreview();
+      renderConversationPreview();
     });
     card.querySelector(".add-bot").addEventListener("click", () => {
       layer.bots.push(createBot());
       persistWorkspace();
       renderLayers();
-      renderOutputPreview();
+      renderConversationPreview();
     });
     card.querySelector(".load-bot-preset").addEventListener("click", () => {
       openPresets({ kind: "bots", targetLayerId: layer.id });
@@ -374,7 +381,7 @@
       botCard.dataset.botId = bot.id;
       bindTextInput(botCard.querySelector(".bot-name"), bot.name, (value) => {
         bot.name = normalizeText(value, bot.name);
-        renderOutputPreview();
+        renderConversationPreview();
       });
       bindTextInput(botCard.querySelector(".bot-system-prompt"), bot.systemPrompt, (value) => {
         bot.systemPrompt = value;
@@ -383,7 +390,7 @@
         layer.bots = layer.bots.filter((candidate) => candidate.id !== bot.id);
         persistWorkspace();
         renderLayers();
-        renderOutputPreview();
+        renderConversationPreview();
       });
       botCard.querySelector(".save-bot-preset").addEventListener("click", () => {
         requestPresetName("bots", bot);
@@ -437,6 +444,21 @@
     });
   }
 
+  function startNewConversation() {
+    if (state.running) {
+      setStatus("Attendez la fin de la session avant de démarrer une nouvelle conversation.", true);
+      return;
+    }
+
+    state.conversation = null;
+    state.conversationNodes = null;
+    state.reasoningBlocks.clear();
+    elements.requestInput.value = "";
+    persistWorkspace();
+    renderConversation();
+    setStatus("Nouvelle conversation prête.");
+  }
+
   function deleteLayer(layerId) {
     if (state.running) {
       return;
@@ -445,48 +467,55 @@
     state.layers = state.layers.filter((layer) => layer.id !== layerId);
     persistWorkspace();
     renderLayers();
-    renderOutputPreview();
+    renderConversationPreview();
   }
 
   function moveLayer(layerId, direction) {
-  if (state.running) {
-    return;
+    if (state.running) {
+      return;
+    }
+
+    const currentIndex = state.layers.findIndex((layer) => layer.id === layerId);
+    if (currentIndex === -1) {
+      return;
+    }
+
+    const targetIndex = currentIndex + direction;
+    if (targetIndex < 0 || targetIndex >= state.layers.length) {
+      return;
+    }
+
+    const scrollTop = elements.layersWorkspace.scrollTop;
+
+    const [movedLayer] = state.layers.splice(currentIndex, 1);
+    state.layers.splice(targetIndex, 0, movedLayer);
+
+    persistWorkspace();
+    renderLayers();
+    renderConversationPreview();
+
+    elements.layersWorkspace.scrollTop = scrollTop;
+    setStatus(`Layer "${movedLayer.name}" déplacé.`);
   }
 
-  const currentIndex = state.layers.findIndex((layer) => layer.id === layerId);
-  if (currentIndex === -1) {
-    return;
+  function handleComposerKeydown(event) {
+    if (event.key === "Enter" && !event.shiftKey) {
+      event.preventDefault();
+      startSession();
+    }
   }
 
-  const targetIndex = currentIndex + direction;
-  if (targetIndex < 0 || targetIndex >= state.layers.length) {
-    return;
+  function updateLayerMoveButtons(card, index) {
+    const upButton = card.querySelector(".move-layer-up");
+    const downButton = card.querySelector(".move-layer-down");
+
+    if (!upButton || !downButton) {
+      return;
+    }
+
+    upButton.disabled = state.running || index === 0;
+    downButton.disabled = state.running || index === state.layers.length - 1;
   }
-
-  const scrollTop = elements.layersWorkspace.scrollTop;
-
-  const [movedLayer] = state.layers.splice(currentIndex, 1);
-  state.layers.splice(targetIndex, 0, movedLayer);
-
-  persistWorkspace();
-  renderLayers();
-  renderOutputPreview();
-
-  elements.layersWorkspace.scrollTop = scrollTop;
-  setStatus(`Layer "${movedLayer.name}" déplacé.`);
-}
-
-function updateLayerMoveButtons(card, index) {
-  const upButton = card.querySelector(".move-layer-up");
-  const downButton = card.querySelector(".move-layer-down");
-
-  if (!upButton || !downButton) {
-    return;
-  }
-
-  upButton.disabled = state.running || index === 0;
-  downButton.disabled = state.running || index === state.layers.length - 1;
-}
   function resetWorkspace() {
     if (state.running || !window.confirm("Réinitialiser le workspace avec les layers par défaut ?")) {
       return;
@@ -509,7 +538,7 @@ function updateLayerMoveButtons(card, index) {
     elements.arbitrationsValue.textContent = elements.arbitrationsSlider.value;
     persistWorkspace();
     renderLayers();
-    renderOutputPreview();
+    renderConversationPreview();
     setStatus("Workspace réinitialisé.");
   }
 
@@ -676,7 +705,7 @@ function updateLayerMoveButtons(card, index) {
 
     persistWorkspace();
     renderLayers();
-    renderOutputPreview();
+    renderConversationPreview();
     setStatus(`Preset "${preset.presetName}" chargé.`);
     closePresets();
   }
@@ -760,13 +789,21 @@ function updateLayerMoveButtons(card, index) {
       setStatus("Ajoutez au moins un bot actif dans un layer de fonction Débat.", true);
       return;
     }
-    if (!hasRunnableChatbots("arbitrate")) {
-      setStatus("Ajoutez au moins un bot actif dans un layer de fonction Arbitrage.", true);
+
+    const initialRequest = normalizeText(elements.requestInput.value, "");
+    if (!initialRequest) {
+      setStatus("Entrez une question initiale avant de lancer.", true);
       return;
     }
 
+    state.conversation = createConversation({
+      initialRequest,
+      running: true,
+      turns: []
+    });
+    elements.requestInput.value = "";
     persistWorkspace();
-    renderOutputPreview();
+    renderConversation();
     setRunning(true);
     setStatus("Démarrage de la session...");
 
@@ -774,7 +811,7 @@ function updateLayerMoveButtons(card, index) {
       await fetchJson("/api/start", {
         body: JSON.stringify({
           agentRoundsPerArbitration: Number(elements.roundsSlider.value),
-          initialRequest: elements.requestInput.value,
+          initialRequest,
           layers: clone(state.layers),
           maxArbitrations: Number(elements.arbitrationsSlider.value)
         }),
@@ -784,6 +821,8 @@ function updateLayerMoveButtons(card, index) {
     } catch (error) {
       console.error(error);
       setRunning(false);
+      elements.requestInput.value = initialRequest;
+      persistWorkspace();
       setStatus(error.message || "Échec du lancement.", true);
     }
   }
@@ -832,7 +871,15 @@ function updateLayerMoveButtons(card, index) {
       return;
     }
     if (event.type === "append") {
-      appendOutput(payload);
+      appendConversationOutput(payload);
+      return;
+    }
+    if (event.type === "turnStart") {
+      startConversationTurn(payload.turn);
+      return;
+    }
+    if (event.type === "turnEnd") {
+      completeConversationTurn(payload.turnId);
       return;
     }
     if (event.type === "reload") {
@@ -841,10 +888,8 @@ function updateLayerMoveButtons(card, index) {
   }
 
   function renderSnapshot(snapshot) {
-    const layers = normalizeSnapshotLayers(snapshot);
-    if (layers.length) {
-      renderOutputs(layers);
-    }
+    state.conversation = createConversationFromSnapshot(snapshot);
+    renderConversation();
     setStatus(snapshot?.status || "Session en cours.");
   }
 
@@ -867,104 +912,492 @@ function updateLayerMoveButtons(card, index) {
     return normalized;
   }
 
-  function renderOutputPreview() {
-    const layers = state.layers
-      .filter((layer) => layer.enabled && (layer.type === "chatbots" || layer.type === "retrieval"))
-      .map((layer) => ({
-        ...clone(layer),
-        bots: layer.type === "chatbots"
-          ? layer.bots.map((bot) => ({ ...bot, content: "" }))
-          : []
-      }));
-    renderOutputs(layers);
+  function renderConversationPreview() {
+    renderConversation();
   }
 
-  function renderOutputs(layers) {
-    state.outputPanels.clear();
-    elements.outputsWorkspace.replaceChildren();
-    const visibleLayers = layers.filter(
-      (layer) =>
-        layer.enabled !== false &&
-        (
-          layer.type === "retrieval" ||
-          (layer.type === "chatbots" && Array.isArray(layer.bots) && layer.bots.length)
-        )
-    );
+  function renderConversation() {
+    state.reasoningBlocks.clear();
+    state.conversationNodes = null;
+    elements.conversationWorkspace.replaceChildren();
 
-    if (!visibleLayers.length) {
-      elements.outputsWorkspace.append(createEmptyState(
-        "Les layers actifs apparaîtront ici."
+    if (!state.conversation) {
+      elements.conversationWorkspace.append(createEmptyState(
+        "Envoyez un message pour démarrer la conversation."
       ));
       return;
     }
 
-    visibleLayers.forEach((layer, index) => {
-      const layerElement = cloneTemplate("#outputLayerTemplate");
-      layerElement.dataset.layerId = layer.id;
-      layerElement.dataset.layerType = layer.type;
-      layerElement.querySelector(".output-layer__index").textContent =
-        String(index + 1).padStart(2, "0");
-      layerElement.querySelector(".output-layer__kind").textContent = getOutputLayerKind(layer);
-      layerElement.querySelector(".output-layer__name").textContent = layer.name;
-      const botsRoot = layerElement.querySelector(".output-bots");
+    const conversation = cloneTemplate("#conversationTemplate");
+    const nodes = {
+      answer: conversation.querySelector(".final-answer"),
+      reasoningList: conversation.querySelector(".reasoning-list"),
+      userMessage: conversation.querySelector(".user-message")
+    };
 
-      if (layer.type === "retrieval") {
-        renderRetrievalOutput(botsRoot, layer);
-        elements.outputsWorkspace.append(layerElement);
-        return;
-      }
+    nodes.userMessage.textContent = state.conversation.initialRequest;
 
-      layer.bots.forEach((bot) => {
-        const botElement = cloneTemplate("#outputBotTemplate");
-        botElement.dataset.botId = bot.id;
-        botElement.querySelector(".output-bot__name").textContent = bot.name;
-        botElement.querySelector("pre").textContent = normalizeContent(bot.content);
-        botsRoot.append(botElement);
-        state.outputPanels.set(outputKey(layer.id, bot.id), botElement);
-        state.outputPanels.set(bot.id, botElement);
-      });
+    for (const turn of state.conversation.turns) {
+      appendThinkingTurn(nodes, turn);
+    }
 
-      elements.outputsWorkspace.append(layerElement);
+    state.conversationNodes = nodes;
+    updateConversationSummary();
+    elements.conversationWorkspace.append(conversation);
+    scrollConversationToBottom();
+  }
+
+  function appendThinkingTurn(nodes, turn) {
+    const turnElement = cloneTemplate("#thinkingTurnTemplate");
+    const content = turnElement.querySelector("pre");
+
+    turnElement.dataset.turnId = turn.id;
+    turnElement.dataset.turnKind = turn.kind;
+    turnElement.classList.toggle("is-active", turn.status === "running");
+    turnElement.classList.toggle("is-complete", turn.status === "complete");
+    turnElement.open = turn.status === "running";
+    turnElement.querySelector(".reasoning-block__title").textContent =
+      normalizeText(turn.title, `Thinking about ${normalizeText(turn.agentName, "un agent")}...`);
+    turnElement.querySelector(".reasoning-block__meta").textContent = normalizeText(turn.meta, "");
+    content.textContent = sanitizeVisibleModelText(turn.content, turn);
+
+    nodes.reasoningList.append(turnElement);
+    registerReasoningBlock(turn, turnElement);
+  }
+
+  function createConversation({ initialRequest, running, turns }) {
+    return {
+      initialRequest: normalizeText(initialRequest, ""),
+      running: Boolean(running),
+      turns: normalizeConversationTurns(turns)
+    };
+  }
+
+  function createConversationFromSnapshot(snapshot) {
+    const turns = Array.isArray(snapshot?.turns)
+      ? snapshot.turns
+      : deriveTurnsFromSnapshotLayers(snapshot);
+
+    return createConversation({
+      initialRequest: snapshot?.session?.initialRequest,
+      running: state.running,
+      turns
     });
   }
 
-  function renderRetrievalOutput(root, layer) {
-    const indicator = document.createElement("div");
-    const status = document.createElement("span");
-    const meta = document.createElement("p");
+  function deriveTurnsFromSnapshotLayers(snapshot) {
+    const layers = normalizeSnapshotLayers(snapshot);
+    const turns = [];
 
-    root.className = "output-layer__body output-retrieval";
-    status.className = "output-retrieval__status";
-    status.textContent = state.running ? "Actif" : "Prêt";
-    meta.textContent = formatRetrievalMeta(layer);
+    for (const layer of layers) {
+      if (layer.type !== "chatbots") {
+        continue;
+      }
 
-    indicator.append(status, meta);
-    root.append(indicator);
+      for (const bot of layer.bots) {
+        const content = normalizeContent(bot.content);
+        if (!content) {
+          continue;
+        }
+
+        turns.push({
+          id: createId("snapshot-turn"),
+          agentName: bot.name,
+          botId: bot.id,
+          content,
+          kind: layer.config?.purpose === "arbitrate" ? "arbiter" : "agent",
+          layerId: layer.id,
+          meta: layer.name,
+          status: "complete",
+          title: `Thinking about ${bot.name}...`
+        });
+      }
+    }
+
+    return turns;
   }
 
-  function getOutputLayerKind(layer) {
-    if (layer.type === "retrieval") {
+  function normalizeConversationTurns(turns) {
+    if (!Array.isArray(turns)) {
+      return [];
+    }
+
+    return turns
+      .filter((turn) => turn && typeof turn === "object")
+      .map((turn, index) => normalizeConversationTurn(turn, index));
+  }
+
+  function normalizeConversationTurn(turn, index = 0) {
+    const kind = normalizeConversationTurnKind(turn.kind);
+    const agentName = normalizeText(turn.agentName, getDefaultTurnAgentName(kind));
+
+    return {
+      id: normalizeText(turn.id, createId(`turn-${index + 1}`)),
+      agentName,
+      botId: normalizeText(turn.botId, ""),
+      content: normalizeContent(turn.content),
+      kind,
+      layerId: normalizeText(turn.layerId, ""),
+      meta: normalizeText(turn.meta, ""),
+      status: turn.status === "complete" ? "complete" : "running",
+      title: normalizeText(turn.title, getDefaultTurnTitle(kind, agentName))
+    };
+  }
+
+  function normalizeConversationTurnKind(kind) {
+    if (kind === "arbiter" || kind === "retrieval") {
+      return kind;
+    }
+
+    return "agent";
+  }
+
+  function getDefaultTurnAgentName(kind) {
+    if (kind === "arbiter") {
+      return "Arbitre";
+    }
+    if (kind === "retrieval") {
       return "Retrieval";
     }
 
-    return layer.config?.purpose === "arbitrate" ? "Arbitrage" : "Débat";
+    return "Agent";
   }
 
-  function formatRetrievalMeta(layer) {
-    const directory = normalizeText(layer.config?.directory, "Répertoire non défini");
-    const topK = positiveInteger(layer.config?.topK, DEFAULT_RETRIEVAL_CONFIG.topK);
+  function getDefaultTurnTitle(kind, agentName) {
+    if (kind === "arbiter") {
+      return `Arbitrage par ${agentName}`;
+    }
+    if (kind === "retrieval") {
+      return `Retrieval - ${agentName}`;
+    }
 
-    return `${directory} · top ${topK}`;
+    return `Thinking about ${agentName}...`;
   }
 
-  function appendOutput(payload) {
-    const layerId = payload.layerId
-      ?? (typeof payload.layer === "string" ? payload.layer : payload.layer?.id);
-    const botId = payload.botId
-      ?? (typeof payload.bot === "string" ? payload.bot : payload.bot?.id)
-      ?? payload.id;
-    const panel = state.outputPanels.get(outputKey(layerId, botId))
-      || state.outputPanels.get(botId);
+  function startConversationTurn(turn) {
+    if (!state.conversation) {
+      state.conversation = createConversation({
+        initialRequest: elements.requestInput.value,
+        running: true,
+        turns: []
+      });
+      renderConversation();
+    }
+
+    const normalizedTurn = normalizeConversationTurn(turn, state.conversation.turns.length);
+    const existingTurn = findConversationTurn(normalizedTurn.id) ||
+      findConversationTurnForPayload({
+        agentName: normalizedTurn.agentName,
+        botId: normalizedTurn.botId,
+        id: normalizedTurn.botId,
+        layerId: normalizedTurn.layerId
+      });
+    if (existingTurn) {
+      const previousTurnId = existingTurn.id;
+      Object.assign(existingTurn, {
+        agentName: normalizedTurn.agentName,
+        botId: normalizedTurn.botId,
+        id: normalizedTurn.id,
+        kind: normalizedTurn.kind,
+        layerId: normalizedTurn.layerId,
+        meta: normalizedTurn.meta,
+        status: "running",
+        title: normalizedTurn.title
+      });
+
+      const existingPanel = findReasoningBlockForPayload({
+        botId: existingTurn.botId,
+        id: existingTurn.botId,
+        layerId: existingTurn.layerId,
+        turnId: existingTurn.id
+      }) || findReasoningBlockForPayload({
+        botId: existingTurn.botId,
+        id: existingTurn.botId,
+        layerId: existingTurn.layerId,
+        turnId: previousTurnId
+      });
+
+      if (existingPanel) {
+        existingPanel.classList.add("is-active");
+        existingPanel.classList.remove("is-complete");
+        existingPanel.open = true;
+        registerReasoningBlock(existingTurn, existingPanel);
+      } else if (state.conversationNodes) {
+        appendThinkingTurn(state.conversationNodes, existingTurn);
+      } else {
+        renderConversation();
+      }
+
+      updateConversationSummary();
+      scrollConversationToBottom();
+      return;
+    }
+
+    state.conversation.turns.push(normalizedTurn);
+
+    if (!state.conversationNodes) {
+      renderConversation();
+      return;
+    }
+
+    collapseRunningThinkingTurns();
+    appendThinkingTurn(state.conversationNodes, normalizedTurn);
+    updateConversationSummary();
+    scrollConversationToBottom();
+  }
+
+  function completeConversationTurn(turnId) {
+    const turn = findConversationTurn(turnId);
+    if (turn) {
+      turn.status = "complete";
+    }
+
+    const panel = findReasoningBlockForPayload({ turnId });
+    if (panel) {
+      panel.classList.remove("is-active");
+      panel.classList.add("is-complete");
+      panel.open = false;
+    }
+
+    updateConversationSummary();
+    scrollConversationToBottom();
+  }
+
+  function collapseRunningThinkingTurns() {
+    document.querySelectorAll(".reasoning-block.is-active").forEach((turn) => {
+      turn.classList.remove("is-active");
+      turn.classList.add("is-complete");
+      turn.open = false;
+    });
+  }
+
+  function findConversationTurn(turnId) {
+    const normalizedTurnId = normalizeText(turnId, "");
+    if (!normalizedTurnId || !state.conversation) {
+      return null;
+    }
+
+    return state.conversation.turns.find((turn) => turn.id === normalizedTurnId) || null;
+  }
+
+  function findConversationTurnForPayload(payload) {
+    const exactTurn = findConversationTurn(payload?.turnId);
+    if (exactTurn) {
+      return exactTurn;
+    }
+    if (!state.conversation) {
+      return null;
+    }
+
+    const layerId = normalizeText(payload?.layerId, "");
+    const botId = normalizeText(payload?.botId ?? payload?.id, "");
+    const agentName = normalizeLookupText(payload?.agentName ?? payload?.botName ?? payload?.name);
+    const runningTurns = state.conversation.turns.filter((turn) => turn.status === "running");
+
+    return runningTurns.find((turn) =>
+      layerId &&
+      botId &&
+      turn.layerId === layerId &&
+      turn.botId === botId
+    ) ||
+      runningTurns.find((turn) => botId && turn.botId === botId) ||
+      runningTurns.find((turn) =>
+        layerId &&
+        agentName &&
+        turn.layerId === layerId &&
+        normalizeLookupText(turn.agentName) === agentName
+      ) ||
+      null;
+  }
+
+  function findReasoningBlockForPayload(payload) {
+    const keys = getReasoningKeysForPayload(payload);
+    for (const key of keys) {
+      const block = state.reasoningBlocks.get(key);
+      if (block) {
+        return block;
+      }
+    }
+
+    const turn = findConversationTurnForPayload(payload);
+    if (!turn) {
+      return null;
+    }
+
+    for (const key of getReasoningKeysForTurn(turn)) {
+      const block = state.reasoningBlocks.get(key);
+      if (block) {
+        return block;
+      }
+    }
+
+    return null;
+  }
+
+  function registerReasoningBlock(turn, block) {
+    for (const key of getReasoningKeysForTurn(turn)) {
+      state.reasoningBlocks.set(key, block);
+    }
+  }
+
+  function getReasoningKeysForTurn(turn) {
+    return getReasoningKeys({
+      agentName: turn?.agentName,
+      botId: turn?.botId,
+      id: turn?.botId,
+      layerId: turn?.layerId,
+      name: turn?.agentName,
+      turnId: turn?.id
+    });
+  }
+
+  function getReasoningKeysForPayload(payload) {
+    return getReasoningKeys({
+      agentName: payload?.agentName ?? payload?.botName ?? payload?.name,
+      botId: payload?.botId ?? payload?.id,
+      id: payload?.id,
+      layerId: payload?.layerId,
+      name: payload?.name,
+      turnId: payload?.turnId
+    });
+  }
+
+  function getReasoningKeys(source) {
+    const keys = [];
+    const turnId = normalizeText(source?.turnId, "");
+    const layerId = normalizeText(source?.layerId, "");
+    const botId = normalizeText(source?.botId ?? source?.id, "");
+    const agentName = normalizeLookupText(source?.agentName ?? source?.name);
+
+    addReasoningKey(keys, turnId);
+    if (layerId || botId) {
+      addReasoningKey(keys, reasoningKey(layerId, botId));
+    }
+    addReasoningKey(keys, botId);
+    if (agentName) {
+      addReasoningKey(keys, `name:${agentName}`);
+      if (layerId) {
+        addReasoningKey(keys, `name:${layerId}:${agentName}`);
+      }
+    }
+
+    return keys;
+  }
+
+  function addReasoningKey(keys, key) {
+    const normalizedKey = normalizeText(key, "");
+    if (!normalizedKey || normalizedKey === ":" || keys.includes(normalizedKey)) {
+      return;
+    }
+
+    keys.push(normalizedKey);
+  }
+
+  function createLiveConversationTurn(payload) {
+    const target = findLayerBotForPayload(payload);
+    const layer = target?.layer || null;
+    const bot = target?.bot || null;
+    const layerId = normalizeText(payload?.layerId, layer?.id || "");
+    const botId = normalizeText(payload?.botId ?? payload?.id, bot?.id || "");
+    const inferredKind = layer?.type === "retrieval"
+      ? "retrieval"
+      : layer?.config?.purpose === "arbitrate"
+        ? "arbiter"
+        : "agent";
+    const kind = normalizeConversationTurnKind(payload?.kind || inferredKind);
+    const agentName = normalizeText(
+      payload?.agentName ?? payload?.botName ?? payload?.name,
+      bot?.name || layer?.name || getDefaultTurnAgentName(kind)
+    );
+
+    return normalizeConversationTurn({
+      agentName,
+      botId,
+      content: "",
+      id: normalizeText(payload?.turnId, createId("live-turn")),
+      kind,
+      layerId,
+      meta: normalizeText(payload?.meta, layer?.name || ""),
+      status: "running",
+      title: normalizeText(payload?.title, getDefaultTurnTitle(kind, agentName))
+    }, state.conversation?.turns.length || 0);
+  }
+
+  function findLayerBotForPayload(payload) {
+    const layerId = normalizeText(payload?.layerId, "");
+    const botId = normalizeText(payload?.botId ?? payload?.id, "");
+    const agentName = normalizeLookupText(payload?.agentName ?? payload?.botName ?? payload?.name);
+
+    for (const layer of state.layers) {
+      if (layerId && layer.id !== layerId) {
+        continue;
+      }
+
+      const bot = layer.bots.find((candidate) =>
+        botId && candidate.id === botId
+      ) || layer.bots.find((candidate) =>
+        agentName && normalizeLookupText(candidate.name) === agentName
+      ) || null;
+
+      if (bot || layerId) {
+        return { bot, layer };
+      }
+    }
+
+    if (!botId && !agentName) {
+      return null;
+    }
+
+    for (const layer of state.layers) {
+      const bot = layer.bots.find((candidate) =>
+        botId && candidate.id === botId
+      ) || layer.bots.find((candidate) =>
+        agentName && normalizeLookupText(candidate.name) === agentName
+      ) || null;
+
+      if (bot) {
+        return { bot, layer };
+      }
+    }
+
+    return null;
+  }
+
+  function updateConversationSummary() {
+    const nodes = state.conversationNodes;
+    if (!nodes || !state.conversation) {
+      return;
+    }
+
+    const completedOutputTurns = [...state.conversation.turns]
+      .filter((turn) => turn.kind !== "retrieval" && normalizeContent(turn.content).trim());
+    const latestArbiterTurn = [...completedOutputTurns]
+      .reverse()
+      .find((turn) => turn.kind === "arbiter");
+    const fallbackTurn = [...completedOutputTurns].reverse()[0];
+    const finalTurn = state.conversation.running
+      ? null
+      : latestArbiterTurn || fallbackTurn || null;
+    const answer = sanitizeVisibleModelText(finalTurn?.content, finalTurn).trim();
+
+    if (answer) {
+      nodes.answer.innerHTML = renderMarkdown(answer);
+      if (state.finalAnswerText !== answer) {
+        state.finalAnswerText = answer;
+      }
+    } else {
+      nodes.answer.textContent = state.conversation.running
+        ? "Thinking..."
+        : "La réponse finale apparaîtra ici.";
+      state.finalAnswerText = "";
+    }
+
+    nodes.answer.classList.toggle("is-waiting", !answer && state.conversation.running);
+    nodes.answer.classList.toggle("is-empty", !answer);
+  }
+
+  function appendConversationOutput(payload) {
+    const panel = ensureReasoningBlockForPayload(payload);
 
     if (!panel) {
       return;
@@ -972,19 +1405,78 @@ function updateLayerMoveButtons(card, index) {
 
     const output = panel.querySelector("pre");
     const shouldFollow = output.scrollTop + output.clientHeight >= output.scrollHeight - 20;
-    output.textContent += normalizeContent(payload.text ?? payload.content);
-    panel.querySelector(".output-bot__status").textContent = "En cours";
+    const text = normalizeContent(payload.text ?? payload.content);
+    panel.classList.add("is-active");
+    panel.classList.remove("is-complete");
+    panel.open = true;
+
+    const turn = findConversationTurnForPayload(payload);
+    if (turn) {
+      turn.content += text;
+      registerReasoningBlock(turn, panel);
+      const visibleText = sanitizeVisibleModelText(turn.content, turn);
+      output.textContent = visibleText;
+    } else {
+      const visibleText = sanitizeVisibleModelText(text);
+      output.textContent += visibleText;
+    }
 
     if (shouldFollow) {
       output.scrollTop = output.scrollHeight;
     }
+
+    updateConversationSummary();
+    scrollConversationToBottom();
+  }
+
+  function ensureReasoningBlockForPayload(payload) {
+    if (!state.conversation) {
+      state.conversation = createConversation({
+        initialRequest: elements.requestInput.value,
+        running: true,
+        turns: []
+      });
+    }
+
+    if (!state.conversationNodes) {
+      renderConversation();
+    }
+
+    const existingPanel = findReasoningBlockForPayload(payload);
+    if (existingPanel) {
+      return existingPanel;
+    }
+
+    let turn = findConversationTurnForPayload(payload);
+    if (!turn) {
+      turn = createLiveConversationTurn(payload);
+      state.conversation.turns.push(turn);
+    }
+
+    if (!state.conversationNodes) {
+      renderConversation();
+    } else {
+      appendThinkingTurn(state.conversationNodes, turn);
+    }
+
+    const panel = findReasoningBlockForPayload({
+      ...payload,
+      botId: turn.botId,
+      id: turn.botId,
+      layerId: turn.layerId,
+      turnId: turn.id
+    });
+
+    return panel;
   }
 
   function setRunning(running) {
     const wasRunning = state.running;
     state.running = running;
     elements.startButton.disabled = running;
-    elements.startButton.textContent = running ? "Session en cours" : "Lancer la session";
+    elements.startButton.textContent = running ? "…" : "↑";
+    elements.startButton.setAttribute("aria-label", running ? "Session en cours" : "Envoyer");
+    elements.newConversationButton.disabled = running;
     elements.roundsSlider.disabled = running;
     elements.arbitrationsSlider.disabled = running;
     elements.requestInput.disabled = running;
@@ -994,16 +1486,27 @@ function updateLayerMoveButtons(card, index) {
     elements.openPresetsButton.disabled = running;
     document.querySelectorAll(".layer-card").forEach(setInteractiveState);
 
+    if (state.conversation) {
+      state.conversation.running = running;
+    }
+
     if (wasRunning && !running) {
-      document.querySelectorAll(".output-bot__status").forEach((status) => {
-        status.textContent = "Terminé";
-      });
-      document.querySelectorAll(".output-bot").forEach((bot) => {
-        bot.classList.add("is-complete");
+      document.querySelectorAll(".reasoning-block.is-active").forEach((turn) => {
+        turn.classList.remove("is-active");
+        turn.classList.add("is-complete");
+        turn.open = false;
       });
     }
-    document.querySelectorAll(".output-retrieval__status").forEach((status) => {
-      status.textContent = running ? "Actif" : wasRunning ? "Terminé" : "Prêt";
+
+    updateConversationSummary();
+    if (!running) {
+      scrollConversationToBottom();
+    }
+  }
+
+  function scrollConversationToBottom() {
+    requestAnimationFrame(() => {
+      elements.conversationScroll.scrollTop = elements.conversationScroll.scrollHeight;
     });
   }
 
@@ -1016,6 +1519,205 @@ function updateLayerMoveButtons(card, index) {
   function setStatus(text, isError = false) {
     elements.statusText.textContent = normalizeText(text, "Prêt.");
     elements.statusText.classList.toggle("is-error", isError);
+  }
+
+  function sanitizeVisibleModelText(value, turn = null) {
+  const agentName = normalizeText(turn?.agentName, "");
+  let text = normalizeContent(value).replace(/\r\n/g, "\n");
+
+  text = text
+    .split("\n")
+    .filter((line) => !isTechnicalTranscriptHeader(line))
+    .join("\n");
+
+  return stripLeadingVisibleWrappers(text, agentName);
+}
+
+function stripLeadingVisibleWrappers(text, agentName = "") {
+  const lines = text.split("\n");
+
+  const agentPattern = agentName
+    ? new RegExp(`^${escapeRegExp(agentName)}\\s*:?$`, "i")
+    : null;
+
+  const labelPattern =
+    /^(?:R[eé]ponse|REPONSE|RÉPONSE|Synth[eè]se|SYNTHESE|Synthèse|SYNTHÈSE)\s*:\s*(.*)$/i;
+
+  while (lines.length > 0) {
+    const rawLine = lines[0] ?? "";
+    const trimmedLine = rawLine.trim();
+
+    if (!trimmedLine) {
+      lines.shift();
+      continue;
+    }
+
+    if (isTechnicalTranscriptHeader(trimmedLine)) {
+      lines.shift();
+      continue;
+    }
+
+    if (agentPattern && agentPattern.test(trimmedLine)) {
+      lines.shift();
+      continue;
+    }
+
+    const labelMatch = trimmedLine.match(labelPattern);
+    if (labelMatch) {
+      lines.shift();
+
+      const restOfLine = normalizeText(labelMatch[1], "");
+      if (restOfLine) {
+        lines.unshift(restOfLine);
+      }
+
+      continue;
+    }
+
+    break;
+  }
+
+  return lines.join("\n").replace(/^\s+/, "");
+}
+
+  function isTechnicalTranscriptHeader(line) {
+    const normalizedLine = normalizeText(line, "");
+    if (!normalizedLine) {
+      return false;
+    }
+
+    return /^={2,}.*(?:ARBITRAGE|TOUR|R[EÉ]PONSE|REPONSE|SYNTH[EÈ]SE|SYNTHESE).*={2,}.*$/i
+      .test(normalizedLine);
+  }
+
+  function renderMarkdown(source) {
+    const lines = normalizeContent(source).replace(/\r\n/g, "\n").split("\n");
+    const blocks = [];
+    let index = 0;
+
+    while (index < lines.length) {
+      const line = lines[index];
+
+      if (!line.trim()) {
+        index++;
+        continue;
+      }
+
+      if (line.startsWith("```")) {
+        const language = sanitizeCodeLanguage(line.slice(3).trim());
+        const codeLines = [];
+        index++;
+
+        while (index < lines.length && !lines[index].startsWith("```")) {
+          codeLines.push(lines[index]);
+          index++;
+        }
+
+        if (index < lines.length) {
+          index++;
+        }
+
+        const className = language ? ` class="language-${language}"` : "";
+        blocks.push(`<pre><code${className}>${escapeHtml(codeLines.join("\n"))}</code></pre>`);
+        continue;
+      }
+
+      const heading = line.match(/^(#{1,4})\s+(.+)$/);
+      if (heading) {
+        const level = Math.min(heading[1].length + 1, 4);
+        blocks.push(`<h${level}>${renderInlineMarkdown(heading[2])}</h${level}>`);
+        index++;
+        continue;
+      }
+
+      const unordered = line.match(/^\s*[-*]\s+(.+)$/);
+      if (unordered) {
+        const items = [];
+
+        while (index < lines.length) {
+          const item = lines[index].match(/^\s*[-*]\s+(.+)$/);
+          if (!item) {
+            break;
+          }
+          items.push(`<li>${renderInlineMarkdown(item[1])}</li>`);
+          index++;
+        }
+
+        blocks.push(`<ul>${items.join("")}</ul>`);
+        continue;
+      }
+
+      const ordered = line.match(/^\s*\d+\.\s+(.+)$/);
+      if (ordered) {
+        const items = [];
+
+        while (index < lines.length) {
+          const item = lines[index].match(/^\s*\d+\.\s+(.+)$/);
+          if (!item) {
+            break;
+          }
+          items.push(`<li>${renderInlineMarkdown(item[1])}</li>`);
+          index++;
+        }
+
+        blocks.push(`<ol>${items.join("")}</ol>`);
+        continue;
+      }
+
+      const paragraph = [];
+      while (
+        index < lines.length &&
+        lines[index].trim() &&
+        !isMarkdownBlockStart(lines[index])
+      ) {
+        paragraph.push(lines[index].trim());
+        index++;
+      }
+
+      blocks.push(`<p>${renderInlineMarkdown(paragraph.join(" "))}</p>`);
+    }
+
+    return blocks.join("");
+  }
+
+  function renderInlineMarkdown(text) {
+    const codeSnippets = [];
+    const withPlaceholders = normalizeContent(text).replace(/`([^`\n]+)`/g, (_, code) => {
+      const placeholder = `\u0000${codeSnippets.length}\u0000`;
+      codeSnippets.push(`<code>${escapeHtml(code)}</code>`);
+      return placeholder;
+    });
+
+    let html = escapeHtml(withPlaceholders);
+    html = html.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+    html = html.replace(/\b_([^_]+)_\b/g, "<em>$1</em>");
+    html = html.replace(/\u0000(\d+)\u0000/g, (_, index) => codeSnippets[Number(index)] || "");
+
+    return html;
+  }
+
+  function isMarkdownBlockStart(line) {
+    return line.startsWith("```") ||
+      /^(#{1,4})\s+/.test(line) ||
+      /^\s*[-*]\s+/.test(line) ||
+      /^\s*\d+\.\s+/.test(line);
+  }
+
+  function sanitizeCodeLanguage(language) {
+    return normalizeText(language.split(/\s+/)[0], "").replace(/[^a-z0-9_-]/gi, "");
+  }
+
+  function escapeHtml(value) {
+    return normalizeContent(value)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#39;");
+  }
+
+  function escapeRegExp(value) {
+    return normalizeText(value, "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   }
 
   async function fetchJson(url, options) {
@@ -1063,7 +1765,7 @@ function updateLayerMoveButtons(card, index) {
     return `${prefix}-${suffix}`;
   }
 
-  function outputKey(layerId, botId) {
+  function reasoningKey(layerId, botId) {
     return `${normalizeText(layerId, "")}:${normalizeText(botId, "")}`;
   }
 
@@ -1072,6 +1774,10 @@ function updateLayerMoveButtons(card, index) {
       return fallback;
     }
     return value.trim() || fallback;
+  }
+
+  function normalizeLookupText(value) {
+    return normalizeText(value, "").toLowerCase();
   }
 
   function normalizeContent(value) {

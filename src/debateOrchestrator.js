@@ -15,7 +15,11 @@ async function runDebate({
   retrieveReferenceContext,
   ui
 }) {
-  const activeArbiters = arbiterAgents || [arbiterAgent];
+  const activeArbiters = Array.isArray(arbiterAgents)
+    ? arbiterAgents.filter(Boolean)
+    : arbiterAgent
+      ? [arbiterAgent]
+      : [];
   const debateState = createDebateState({
     initialRequest: session.initialRequest
   });
@@ -72,6 +76,12 @@ async function runDebate({
 
         const content = await askAgentStreaming({
           baseUrl: config.ollamaBaseUrl,
+          debugMetadata: {
+            arbitrationIndex,
+            kind: "agent",
+            responseIndex: globalResponseIndex,
+            roundIndex
+          },
           model: config.models.slave,
           options: config.ollamaOptions.slave,
           think: config.ollamaThink.slave,
@@ -81,6 +91,7 @@ async function runDebate({
         });
 
         appendAgentToken(ui, agent, "\n");
+        completeUiTurn(ui);
 
         debateState.addAgentResponse({
           agentId: agent.id,
@@ -139,6 +150,11 @@ async function runArbitration({
 
   const content = await askAgentStreaming({
     baseUrl: config.ollamaBaseUrl,
+    debugMetadata: {
+      arbitrationIndex,
+      arbiterIndex,
+      kind: "arbiter"
+    },
     model: config.models.arbiter,
     options: config.ollamaOptions.arbiter,
     think: config.ollamaThink.arbiter,
@@ -148,6 +164,7 @@ async function runArbitration({
   });
 
   appendArbiterToken(ui, arbiterAgent, "\n");
+  completeUiTurn(ui);
 
   debateState.addArbitration({
     arbiterId: arbiterAgent.id,
@@ -177,9 +194,9 @@ function formatSessionIntro({ session, slaveAgents, activeArbiters, config }) {
     "",
     `Question initiale : ${session.initialRequest}`,
     `Modele slaves : ${config.models.slave}`,
-    `Modele arbitre : ${config.models.arbiter}`,
+    `Modele arbitre : ${activeArbiters.length ? config.models.arbiter : "Non utilise"}`,
     `Agents slaves : ${slaveAgents.map((agent) => agent.name).join(", ")}`,
-    `Arbitres : ${activeArbiters.map((agent) => agent.name).join(", ")}`,
+    `Arbitres : ${activeArbiters.length ? activeArbiters.map((agent) => agent.name).join(", ") : "Aucun"}`,
     `Tours complets avant arbitrage : ${session.agentRoundsPerArbitration}`,
     `Nombre d'arbitrages : ${session.maxArbitrations}`,
     ""
@@ -202,6 +219,12 @@ function appendArbiterToken(ui, arbiterAgent, token) {
   }
 
   ui.appendArbiter(token);
+}
+
+function completeUiTurn(ui) {
+  if (typeof ui.completeCurrentTurn === "function") {
+    ui.completeCurrentTurn();
+  }
 }
 
 module.exports = {

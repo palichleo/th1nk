@@ -3,55 +3,63 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>th1nk - studio de layers</title>
+    <title>th1nk - Super agent</title>
     <link rel="stylesheet" href="/app.css">
   </head>
   <body>
-    <main class="shell">
-      <header class="topbar">
-        <div>
-          <p class="eyebrow">Studio multi-agent local</p>
+    <div class="app-layout">
+      <aside class="chat-sidebar" aria-label="Navigation">
+        <div class="sidebar-brand">
           <h1>th1nk</h1>
-          <p class="subtitle">Composez les layers, les comportements et les sources de contexte de votre session.</p>
+          <p>Studio multi-agent local</p>
         </div>
 
-        <div class="session-controls" aria-label="Parametres de session">
-          <label class="slider-field">
-            <span>Tours avant arbitrage</span>
-            <strong id="roundsValue">3</strong>
-            <input type="range" id="roundsSlider" min="1" max="20" value="3" step="1">
-          </label>
-          <label class="slider-field">
-            <span>Cycles d'arbitrage</span>
-            <strong id="arbitrationsValue">2</strong>
-            <input type="range" id="arbitrationsSlider" min="1" max="20" value="2" step="1">
-          </label>
-          <button id="themeButton" class="icon-button" type="button" aria-label="Changer de theme"></button>
-          <button id="configToggleButton" class="quiet-button" type="button">Configurer les layers</button>
-        </div>
-      </header>
+        <button id="newConversationButton" class="new-chat-button" type="button">Nouvelle conversation</button>
 
-      <section class="outputs-section" aria-labelledby="outputsTitle">
-        <div class="section-heading">
-          <div>
-            <p class="eyebrow">Execution</p>
-            <h2 id="outputsTitle">Sorties des modèles</h2>
-          </div>
+        <nav class="chat-history" aria-label="Historique">
+          <p class="sidebar-label">Historique</p>
+          <button class="history-item is-active" type="button">Session locale</button>
+        </nav>
+
+        <div class="sidebar-footer">
           <p id="statusText" class="status-text" role="status">Initialisation...</p>
+          <div class="sidebar-controls" aria-label="Paramètres de session">
+            <label class="slider-field">
+              <span>Tours avant arbitrage</span>
+              <strong id="roundsValue">3</strong>
+              <input type="range" id="roundsSlider" min="1" max="20" value="3" step="1">
+            </label>
+            <label class="slider-field">
+              <span>Cycles d'arbitrage</span>
+              <strong id="arbitrationsValue">2</strong>
+              <input type="range" id="arbitrationsSlider" min="1" max="20" value="2" step="1">
+            </label>
+            <div class="sidebar-actions">
+              <button id="themeButton" class="icon-button" type="button" aria-label="Changer de thème"></button>
+              <button id="configToggleButton" class="quiet-button" type="button">Configurer les layers</button>
+            </div>
+          </div>
         </div>
-        <div id="outputsWorkspace" class="outputs-workspace">
-          <p class="empty-state">Les sorties apparaîtront ici pendant l'exécution.</p>
-        </div>
-      </section>
+      </aside>
 
-      <footer class="prompt-bar">
-        <label for="requestInput">Question initiale</label>
-        <div class="prompt-row">
-          <textarea id="requestInput" rows="3" placeholder="Décrivez la question ou le problème à traiter."></textarea>
-          <button id="startButton" class="start-button" type="button">Lancer la session</button>
-        </div>
-      </footer>
-    </main>
+      <main class="chat-main">
+        <section id="conversationScroll" class="conversation-scroll" aria-label="Conversation">
+          <div id="conversationWorkspace" class="conversation-list">
+            <p class="empty-state">Envoyez un message pour démarrer la conversation.</p>
+          </div>
+        </section>
+
+        <footer class="chat-composer">
+          <div class="composer-inner">
+            <label class="sr-only" for="requestInput">Message</label>
+            <div class="composer-box">
+              <textarea id="requestInput" rows="1" placeholder="Envoyer un message à th1nk"></textarea>
+              <button id="startButton" class="send-button" type="button" aria-label="Envoyer">↑</button>
+            </div>
+          </div>
+        </footer>
+      </main>
+    </div>
 
     <!-- Dialog layers config — même logique stylistique que name-dialog -->
     <dialog id="configDialog" class="config-dialog">
@@ -254,27 +262,28 @@
       </article>
     </template>
 
-    <template id="outputLayerTemplate">
-      <section class="output-layer">
-        <header>
-          <span class="output-layer__index"></span>
-          <span class="output-layer__kind"></span>
-          <h3 class="output-layer__name"></h3>
-        </header>
-        <div class="output-layer__body output-bots"></div>
-      </section>
+    <template id="conversationTemplate">
+      <div class="chat-turn">
+        <article class="message message--user">
+          <div class="message-bubble user-message"></div>
+        </article>
+        <article class="message message--assistant">
+          <div class="assistant-message">
+            <div class="reasoning-list"></div>
+            <div class="final-answer markdown-body"></div>
+          </div>
+        </article>
+      </div>
     </template>
 
-    <template id="outputBotTemplate">
-      <article class="output-bot">
-        <header>
-          <div>
-            <h4 class="output-bot__name"></h4>
-          </div>
-          <span class="output-bot__status">Prêt</span>
-        </header>
+    <template id="thinkingTurnTemplate">
+      <details class="reasoning-block" open>
+        <summary>
+          <span class="reasoning-block__title"></span>
+          <span class="reasoning-block__meta"></span>
+        </summary>
         <pre></pre>
-      </article>
+      </details>
     </template>
 
     <script src="/app.js"></script>

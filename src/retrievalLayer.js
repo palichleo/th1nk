@@ -10,7 +10,8 @@ const SUPPORTED_EXTENSIONS = new Set([
   ".ts",
   ".html",
   ".css",
-  ".csv"
+  ".csv",
+  ".py"
 ]);
 const IGNORED_DIRECTORIES = new Set([".git", ".th1nk", "node_modules"]);
 

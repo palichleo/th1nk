@@ -199,12 +199,19 @@ function createWebServer({ config }) {
         layers: retrievalLayers,
         query: session.initialRequest
       });
+      emitRetrievalTurns({
+        retrieval,
+        retrievalLayers
+      });
 
       currentUi.setStatus("Verification d'Ollama...");
 
       await checkOllamaModels({
         baseUrl: config.ollamaBaseUrl,
-        models: [config.models.slave, config.models.arbiter]
+        models: getRequiredModels({
+          arbiterAgents,
+          config
+        })
       });
 
       const stats = await runDebate({
@@ -244,6 +251,25 @@ function createWebServer({ config }) {
         }
       });
     }
+  }
+
+  function emitRetrievalTurns({ retrieval, retrievalLayers }) {
+    if (
+      !retrievalLayers.length ||
+      !currentUi ||
+      typeof currentUi.addRetrievalTurn !== "function"
+    ) {
+      return;
+    }
+
+    retrieval.layerResults.forEach(({ layer, result }, index) => {
+      currentUi.addRetrievalTurn({
+        index: index + 1,
+        layer,
+        result,
+        total: retrieval.layerResults.length
+      });
+    });
   }
 
   function broadcast(event) {
@@ -288,7 +314,8 @@ async function buildCombinedRetrievalContext({ dataDirectory, layers, query }) {
   return {
     chunksSelected,
     errorCount,
-    context: contexts.join("\n\n")
+    context: contexts.join("\n\n"),
+    layerResults: results
   };
 }
 
@@ -375,12 +402,16 @@ function validateRuntime({ arbiterAgents, slaveAgents }) {
       "Ajoute au moins un bot actif dans un layer chatbots de fonction Debat."
     );
   }
+}
 
-  if (arbiterAgents.length === 0) {
-    throw new TypeError(
-      "Ajoute au moins un bot actif dans un layer chatbots de fonction Arbitrage."
-    );
+function getRequiredModels({ arbiterAgents, config }) {
+  const models = [config.models.slave];
+
+  if (arbiterAgents.length > 0) {
+    models.push(config.models.arbiter);
   }
+
+  return [...new Set(models.filter(Boolean))];
 }
 
 function clampInteger({ fallback, max, min, value }) {
