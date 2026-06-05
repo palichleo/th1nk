@@ -17,6 +17,9 @@
     arbitrationsValue: document.querySelector("#arbitrationsValue"),
     cancelPresetNameButton: document.querySelector("#cancelPresetNameButton"),
     closePresetsButton: document.querySelector("#closePresetsButton"),
+    closeConfigButton: document.querySelector("#closeConfigButton"),
+    configDialog: document.querySelector("#configDialog"),
+    configToggleButton: document.querySelector("#configToggleButton"),
     layersWorkspace: document.querySelector("#layersWorkspace"),
     openPresetsButton: document.querySelector("#openPresetsButton"),
     outputsWorkspace: document.querySelector("#outputsWorkspace"),
@@ -96,6 +99,26 @@
     elements.cancelPresetNameButton.addEventListener("click", closePresetNameDialog);
     elements.themeButton.addEventListener("click", () => {
       applyTheme(document.documentElement.dataset.theme === "dark" ? "light" : "dark");
+    });
+    elements.configToggleButton.addEventListener("click", () => {
+      elements.configDialog.showModal();
+
+      requestAnimationFrame(() => {
+        elements.layersWorkspace.focus();
+      });
+    });
+    elements.closeConfigButton.addEventListener("click", () => elements.configDialog.close());
+    elements.configDialog.addEventListener("click", (event) => {
+      // Ferme uniquement si le clic tombe dans le backdrop (hors du panneau interne)
+      const rect = elements.configDialog.getBoundingClientRect();
+      const insidePanel =
+        event.clientX >= rect.left &&
+        event.clientX <= rect.right &&
+        event.clientY >= rect.top &&
+        event.clientY <= rect.bottom;
+      if (!insidePanel) {
+        elements.configDialog.close();
+      }
     });
     window.addEventListener("keydown", (event) => {
       if (event.key === "Escape" && !elements.presetsDrawer.hidden) {
@@ -200,10 +223,11 @@
   }
 
   function normalizeBot(bot, index = 0) {
+    const name = normalizeText(bot.name, normalizeText(bot.persona, `Bot ${index + 1}`));
+
     return {
       id: normalizeText(bot.id, createId(`bot-${index + 1}`)),
-      name: normalizeText(bot.name, `Bot ${index + 1}`),
-      persona: normalizeText(bot.persona, ""),
+      name,
       systemPrompt: normalizeText(bot.systemPrompt, "")
     };
   }
@@ -293,6 +317,15 @@
         renderOutputPreview();
       });
       card.classList.toggle("is-disabled", !layer.enabled);
+
+      card.querySelector(".move-layer-up").addEventListener("click", () => {
+        moveLayer(layer.id, -1);
+      });
+
+      card.querySelector(".move-layer-down").addEventListener("click", () => {
+        moveLayer(layer.id, 1);
+      });
+
       card.querySelector(".delete-layer").addEventListener("click", () => deleteLayer(layer.id));
       card.querySelector(".save-layer-preset").addEventListener("click", () => {
         requestPresetName("layers", layer);
@@ -307,6 +340,7 @@
       }
 
       setInteractiveState(card);
+      updateLayerMoveButtons(card, index);
       elements.layersWorkspace.append(card);
     });
   }
@@ -340,10 +374,6 @@
       botCard.dataset.botId = bot.id;
       bindTextInput(botCard.querySelector(".bot-name"), bot.name, (value) => {
         bot.name = normalizeText(value, bot.name);
-        renderOutputPreview();
-      });
-      bindTextInput(botCard.querySelector(".bot-persona"), bot.persona, (value) => {
-        bot.persona = value;
         renderOutputPreview();
       });
       bindTextInput(botCard.querySelector(".bot-system-prompt"), bot.systemPrompt, (value) => {
@@ -418,6 +448,45 @@
     renderOutputPreview();
   }
 
+  function moveLayer(layerId, direction) {
+  if (state.running) {
+    return;
+  }
+
+  const currentIndex = state.layers.findIndex((layer) => layer.id === layerId);
+  if (currentIndex === -1) {
+    return;
+  }
+
+  const targetIndex = currentIndex + direction;
+  if (targetIndex < 0 || targetIndex >= state.layers.length) {
+    return;
+  }
+
+  const scrollTop = elements.layersWorkspace.scrollTop;
+
+  const [movedLayer] = state.layers.splice(currentIndex, 1);
+  state.layers.splice(targetIndex, 0, movedLayer);
+
+  persistWorkspace();
+  renderLayers();
+  renderOutputPreview();
+
+  elements.layersWorkspace.scrollTop = scrollTop;
+  setStatus(`Layer "${movedLayer.name}" déplacé.`);
+}
+
+function updateLayerMoveButtons(card, index) {
+  const upButton = card.querySelector(".move-layer-up");
+  const downButton = card.querySelector(".move-layer-down");
+
+  if (!upButton || !downButton) {
+    return;
+  }
+
+  upButton.disabled = state.running || index === 0;
+  downButton.disabled = state.running || index === state.layers.length - 1;
+}
   function resetWorkspace() {
     if (state.running || !window.confirm("Réinitialiser le workspace avec les layers par défaut ?")) {
       return;
@@ -556,7 +625,7 @@
       title.textContent = preset.presetName;
       description.textContent = kind === "layers"
         ? describeLayerPreset(preset.value)
-        : normalizeText(preset.value.persona, "Bot personnalisé");
+        : normalizeText(preset.value.name, normalizeText(preset.value.persona, "Bot personnalisé"));
       loadButton.type = "button";
       loadButton.className = "primary-button";
       loadButton.textContent = "Charger";
@@ -800,10 +869,12 @@
 
   function renderOutputPreview() {
     const layers = state.layers
-      .filter((layer) => layer.enabled && layer.type === "chatbots")
+      .filter((layer) => layer.enabled && (layer.type === "chatbots" || layer.type === "retrieval"))
       .map((layer) => ({
         ...clone(layer),
-        bots: layer.bots.map((bot) => ({ ...bot, content: "" }))
+        bots: layer.type === "chatbots"
+          ? layer.bots.map((bot) => ({ ...bot, content: "" }))
+          : []
       }));
     renderOutputs(layers);
   }
@@ -812,30 +883,41 @@
     state.outputPanels.clear();
     elements.outputsWorkspace.replaceChildren();
     const visibleLayers = layers.filter(
-      (layer) => layer.enabled !== false && Array.isArray(layer.bots) && layer.bots.length
+      (layer) =>
+        layer.enabled !== false &&
+        (
+          layer.type === "retrieval" ||
+          (layer.type === "chatbots" && Array.isArray(layer.bots) && layer.bots.length)
+        )
     );
 
     if (!visibleLayers.length) {
       elements.outputsWorkspace.append(createEmptyState(
-        "Les layers chatbots actifs apparaîtront ici."
+        "Les layers actifs apparaîtront ici."
       ));
       return;
     }
 
-    visibleLayers.forEach((layer) => {
+    visibleLayers.forEach((layer, index) => {
       const layerElement = cloneTemplate("#outputLayerTemplate");
       layerElement.dataset.layerId = layer.id;
-      layerElement.querySelector(".output-layer__kind").textContent =
-        layer.config?.purpose === "arbitrate" ? "Arbitrage" : "Débat";
+      layerElement.dataset.layerType = layer.type;
+      layerElement.querySelector(".output-layer__index").textContent =
+        String(index + 1).padStart(2, "0");
+      layerElement.querySelector(".output-layer__kind").textContent = getOutputLayerKind(layer);
       layerElement.querySelector(".output-layer__name").textContent = layer.name;
       const botsRoot = layerElement.querySelector(".output-bots");
+
+      if (layer.type === "retrieval") {
+        renderRetrievalOutput(botsRoot, layer);
+        elements.outputsWorkspace.append(layerElement);
+        return;
+      }
 
       layer.bots.forEach((bot) => {
         const botElement = cloneTemplate("#outputBotTemplate");
         botElement.dataset.botId = bot.id;
         botElement.querySelector(".output-bot__name").textContent = bot.name;
-        botElement.querySelector(".output-bot__persona").textContent =
-          normalizeText(bot.persona, "Aucune persona");
         botElement.querySelector("pre").textContent = normalizeContent(bot.content);
         botsRoot.append(botElement);
         state.outputPanels.set(outputKey(layer.id, bot.id), botElement);
@@ -844,6 +926,35 @@
 
       elements.outputsWorkspace.append(layerElement);
     });
+  }
+
+  function renderRetrievalOutput(root, layer) {
+    const indicator = document.createElement("div");
+    const status = document.createElement("span");
+    const meta = document.createElement("p");
+
+    root.className = "output-layer__body output-retrieval";
+    status.className = "output-retrieval__status";
+    status.textContent = state.running ? "Actif" : "Prêt";
+    meta.textContent = formatRetrievalMeta(layer);
+
+    indicator.append(status, meta);
+    root.append(indicator);
+  }
+
+  function getOutputLayerKind(layer) {
+    if (layer.type === "retrieval") {
+      return "Retrieval";
+    }
+
+    return layer.config?.purpose === "arbitrate" ? "Arbitrage" : "Débat";
+  }
+
+  function formatRetrievalMeta(layer) {
+    const directory = normalizeText(layer.config?.directory, "Répertoire non défini");
+    const topK = positiveInteger(layer.config?.topK, DEFAULT_RETRIEVAL_CONFIG.topK);
+
+    return `${directory} · top ${topK}`;
   }
 
   function appendOutput(payload) {
@@ -887,7 +998,13 @@
       document.querySelectorAll(".output-bot__status").forEach((status) => {
         status.textContent = "Terminé";
       });
+      document.querySelectorAll(".output-bot").forEach((bot) => {
+        bot.classList.add("is-complete");
+      });
     }
+    document.querySelectorAll(".output-retrieval__status").forEach((status) => {
+      status.textContent = running ? "Actif" : wasRunning ? "Terminé" : "Prêt";
+    });
   }
 
   function setInteractiveState(root) {

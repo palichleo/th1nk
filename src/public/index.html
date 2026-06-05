@@ -27,21 +27,9 @@
             <input type="range" id="arbitrationsSlider" min="1" max="20" value="2" step="1">
           </label>
           <button id="themeButton" class="icon-button" type="button" aria-label="Changer de theme"></button>
+          <button id="configToggleButton" class="quiet-button" type="button">Configurer les layers</button>
         </div>
       </header>
-
-      <section class="toolbar" aria-label="Gestion du workspace">
-        <div class="toolbar__group">
-          <button id="addChatbotsLayerButton" class="primary-button" type="button">+ Layer chatbots</button>
-          <button id="addRetrievalLayerButton" class="secondary-button" type="button">+ Layer retrieval</button>
-        </div>
-        <div class="toolbar__group">
-          <button id="openPresetsButton" class="secondary-button" type="button">Bibliotheque de presets</button>
-          <button id="resetWorkspaceButton" class="quiet-button" type="button">Reinitialiser</button>
-        </div>
-      </section>
-
-      <section id="layersWorkspace" class="layers-workspace" aria-label="Layers"></section>
 
       <section class="outputs-section" aria-labelledby="outputsTitle">
         <div class="section-heading">
@@ -64,6 +52,32 @@
         </div>
       </footer>
     </main>
+
+    <!-- Dialog layers config — même logique stylistique que name-dialog -->
+    <dialog id="configDialog" class="config-dialog">
+      <div class="config-dialog__inner">
+        <header class="config-dialog__header">
+          <div>
+            <p class="eyebrow">Workspace</p>
+            <h2>Layers &amp; configuration</h2>
+          </div>
+          <button id="closeConfigButton" class="icon-button" type="button" aria-label="Fermer">×</button>
+        </header>
+
+        <div class="config-dialog__toolbar">
+          <div class="toolbar__group">
+            <button id="addChatbotsLayerButton" class="primary-button" type="button">+ Layer chatbots</button>
+            <button id="addRetrievalLayerButton" class="secondary-button" type="button">+ Layer retrieval</button>
+          </div>
+          <div class="toolbar__group">
+            <button id="openPresetsButton" class="secondary-button" type="button">Bibliotheque de presets</button>
+            <button id="resetWorkspaceButton" class="quiet-button" type="button">Reinitialiser</button>
+          </div>
+        </div>
+
+        <section id="layersWorkspace" class="layers-workspace" aria-label="Layers" tabindex="0"></section>
+      </div>
+    </dialog>
 
     <aside id="presetsDrawer" class="drawer" hidden aria-labelledby="presetsTitle">
       <button class="drawer__backdrop" type="button" data-close-drawer aria-label="Fermer"></button>
@@ -109,10 +123,16 @@
             </div>
           </div>
           <div class="layer-card__actions">
+            <div class="layer-order-actions" aria-label="Ordre d'exécution">
+              <button class="icon-button move-layer-up" type="button" aria-label="Monter ce layer">↑</button>
+              <button class="icon-button move-layer-down" type="button" aria-label="Descendre ce layer">↓</button>
+            </div>
+
             <label class="switch">
               <input class="layer-enabled" type="checkbox">
               <span>Actif</span>
             </label>
+
             <button class="quiet-button save-layer-preset" type="button">Enregistrer preset</button>
             <button class="danger-button delete-layer" type="button">Supprimer</button>
           </div>
@@ -145,10 +165,16 @@
             </div>
           </div>
           <div class="layer-card__actions">
+            <div class="layer-order-actions" aria-label="Ordre d'exécution">
+              <button class="icon-button move-layer-up" type="button" aria-label="Monter ce layer">↑</button>
+              <button class="icon-button move-layer-down" type="button" aria-label="Descendre ce layer">↓</button>
+            </div>
+
             <label class="switch">
               <input class="layer-enabled" type="checkbox">
               <span>Actif</span>
             </label>
+
             <button class="quiet-button save-layer-preset" type="button">Enregistrer preset</button>
             <button class="danger-button delete-layer" type="button">Supprimer</button>
           </div>
@@ -185,10 +211,16 @@
             </div>
           </div>
           <div class="layer-card__actions">
+            <div class="layer-order-actions" aria-label="Ordre d'exécution">
+              <button class="icon-button move-layer-up" type="button" aria-label="Monter ce layer">↑</button>
+              <button class="icon-button move-layer-down" type="button" aria-label="Descendre ce layer">↓</button>
+            </div>
+
             <label class="switch">
               <input class="layer-enabled" type="checkbox">
               <span>Actif</span>
             </label>
+
             <button class="quiet-button save-layer-preset" type="button">Enregistrer preset</button>
             <button class="danger-button delete-layer" type="button">Supprimer</button>
           </div>
@@ -216,10 +248,6 @@
           </div>
         </header>
         <label class="field">
-          <span>Persona</span>
-          <textarea class="bot-persona" rows="3" placeholder="Rôle, angle d'analyse, contraintes..."></textarea>
-        </label>
-        <label class="field">
           <span>System prompt</span>
           <textarea class="bot-system-prompt" rows="5" placeholder="Instructions système complètes..."></textarea>
         </label>
@@ -229,10 +257,11 @@
     <template id="outputLayerTemplate">
       <section class="output-layer">
         <header>
+          <span class="output-layer__index"></span>
           <span class="output-layer__kind"></span>
           <h3 class="output-layer__name"></h3>
         </header>
-        <div class="output-bots"></div>
+        <div class="output-layer__body output-bots"></div>
       </section>
     </template>
 
@@ -241,7 +270,6 @@
         <header>
           <div>
             <h4 class="output-bot__name"></h4>
-            <p class="output-bot__persona"></p>
           </div>
           <span class="output-bot__status">Prêt</span>
         </header>

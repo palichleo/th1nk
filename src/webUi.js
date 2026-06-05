@@ -51,7 +51,7 @@ function createWebUi({ layers, sendEvent, session }) {
         "",
         "",
         `=== ARBITRAGE ${arbitrationIndex} / TOUR ${roundIndex} / REPONSE ${responseIndex} ===`,
-        `${agent.name} (${agent.persona})`,
+        formatAgentLabel(agent),
         "",
         "Reponse :",
         ""
@@ -105,6 +105,17 @@ function createWebUi({ layers, sendEvent, session }) {
       arbiterId: firstArbiter.id,
       text
     });
+  }
+
+  function formatAgentLabel(agent) {
+    const name = typeof agent.name === "string" ? agent.name.trim() : "";
+    const persona = typeof agent.persona === "string" ? agent.persona.trim() : "";
+
+    if (!persona || persona === name) {
+      return agent.name;
+    }
+
+    return `${agent.name} (${persona})`;
   }
 
   function render() {

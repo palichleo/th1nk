@@ -15,6 +15,7 @@
   --danger: #a43d34;
   --danger-soft: #f7dfdc;
   --focus: rgba(184, 75, 45, 0.22);
+  --response-caret: #000000;
   --shadow: 0 14px 45px rgba(51, 47, 39, 0.08);
 }
 
@@ -33,6 +34,7 @@
   --danger: #ee847b;
   --danger-soft: #3d2524;
   --focus: rgba(224, 123, 89, 0.25);
+  --response-caret: #ffffff;
   --shadow: 0 16px 50px rgba(0, 0, 0, 0.25);
 }
 
@@ -470,6 +472,10 @@ h1 {
   background: var(--surface);
 }
 
+.output-layer[data-layer-type="retrieval"] {
+  border-left: 4px solid #3f7665;
+}
+
 .output-layer > header {
   display: flex;
   align-items: center;
@@ -478,12 +484,22 @@ h1 {
   border-bottom: 1px solid var(--line);
 }
 
+.output-layer__index {
+  color: var(--muted);
+  font: 500 0.68rem/1 "IBM Plex Mono", monospace;
+}
+
 .output-layer__kind {
   padding: 3px 6px;
   background: var(--accent-soft);
   color: var(--accent);
   font: 500 0.62rem/1 "IBM Plex Mono", monospace;
   text-transform: uppercase;
+}
+
+.output-layer[data-layer-type="retrieval"] .output-layer__kind {
+  background: color-mix(in srgb, #3f7665 18%, var(--surface));
+  color: #3f7665;
 }
 
 .output-layer__name {
@@ -516,15 +532,6 @@ h1 {
   font-size: 0.9rem;
 }
 
-.output-bot p {
-  overflow: hidden;
-  margin-bottom: 0;
-  color: var(--muted);
-  font-size: 0.7rem;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .output-bot__status {
   color: var(--accent);
   font: 0.62rem/1 "IBM Plex Mono", monospace;
@@ -541,6 +548,61 @@ h1 {
   font: 0.76rem/1.58 "IBM Plex Mono", monospace;
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+.output-bot pre::after {
+  display: inline-block;
+  width: 6px;
+  height: 1.16em;
+  margin-left: 3px;
+  background: var(--response-caret);
+  content: "";
+  vertical-align: -0.18em;
+  animation: response-caret-blink 980ms steps(1, end) infinite;
+}
+
+.output-bot.is-complete pre::after {
+  display: none;
+}
+
+@keyframes response-caret-blink {
+  0%,
+  52% {
+    opacity: 1;
+  }
+
+  53%,
+  100% {
+    opacity: 0;
+  }
+}
+
+.output-retrieval {
+  padding: 13px 14px;
+  background: var(--surface);
+}
+
+.output-retrieval > div {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.output-retrieval__status {
+  flex: 0 0 auto;
+  color: #3f7665;
+  font: 500 0.62rem/1 "IBM Plex Mono", monospace;
+  text-transform: uppercase;
+}
+
+.output-retrieval p {
+  overflow: hidden;
+  margin-bottom: 0;
+  color: var(--muted);
+  font-size: 0.75rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .empty-state {
@@ -681,6 +743,80 @@ h1 {
   gap: 6px;
 }
 
+.config-dialog {
+  /* Caché par défaut — ouvert uniquement via showModal() */
+  display: none;
+  width: min(1200px, calc(100% - 28px));
+  height: min(90vh, 860px);
+  height: min(90dvh, 860px);
+  max-height: calc(100vh - 28px);
+  max-height: calc(100dvh - 28px);
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+
+.config-dialog[open] {
+  display: flex;
+  flex-direction: column;
+}
+
+.config-dialog::backdrop {
+  background: rgba(20, 20, 18, 0.55);
+  backdrop-filter: blur(4px);
+}
+
+.config-dialog__inner {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  flex: 1;
+  overflow: hidden;
+}
+
+.config-dialog__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 18px 22px;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface-soft);
+  flex-shrink: 0;
+}
+
+.config-dialog__header h2 {
+  margin-bottom: 0;
+  font-size: 1.4rem;
+  letter-spacing: -0.04em;
+}
+
+.config-dialog__toolbar {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 11px 22px;
+  border-bottom: 1px solid var(--line);
+  background: color-mix(in srgb, var(--bg) 90%, transparent);
+  flex-shrink: 0;
+}
+
+.config-dialog .layers-workspace {
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 18px 22px 22px;
+  flex: 1;
+  min-height: 0;
+  scrollbar-gutter: stable;
+  touch-action: pan-y;
+  -webkit-overflow-scrolling: touch;
+}
+
 .name-dialog {
   width: min(430px, calc(100% - 28px));
   padding: 0;
@@ -789,4 +925,39 @@ h1 {
     display: grid;
     grid-template-columns: 1fr 1fr;
   }
+}
+/* Fix scroll réel dans la modale de configuration */
+#layersWorkspace.layers-workspace {
+  display: flex !important;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 18px;
+
+  flex: 1 1 auto;
+  min-height: 0;
+
+  overflow-y: auto;
+  overflow-x: hidden;
+
+  padding: 18px 22px 22px;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+
+/* Empêche les layers de se compresser */
+#layersWorkspace.layers-workspace > .layer-card,
+#layersWorkspace.layers-workspace > .empty-state {
+  flex: 0 0 auto;
+}
+
+.layer-order-actions {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.layer-order-actions .icon-button {
+  width: 31px;
+  height: 31px;
+  font-size: 0.95rem;
 }

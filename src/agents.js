@@ -15,12 +15,12 @@ const DEFAULT_SLAVE_PERSONAS = [
 function createDefaultSlaveProfile(index) {
   const id = createAgentId(index);
   const personaTemplate = DEFAULT_SLAVE_PERSONAS[index % DEFAULT_SLAVE_PERSONAS.length];
-  const { name, persona } = splitDefaultPersonaTemplate(personaTemplate, id);
+  const { name } = splitDefaultPersonaTemplate(personaTemplate, id);
 
   return {
     id,
     name,
-    persona,
+    persona: name,
     systemPrompt: ""
   };
 }
@@ -65,7 +65,7 @@ function createDefaultArbiterProfile(index = 0) {
   return {
     id,
     name,
-    persona: "synthese et arbitrage",
+    persona: name,
     systemPrompt: buildArbiterSystemPrompt()
   };
 }
@@ -115,13 +115,12 @@ function normalizeSlaveProfile(profile, fallbackProfile) {
   }
 
   const id = normalizeText(profile.id, fallbackProfile.id);
-  const name = normalizeSlaveName(profile.name, fallbackProfile);
-  const persona = normalizeSlavePersona(profile.persona, fallbackProfile, profile.name, name);
+  const name = normalizeSlaveName(profile.name ?? profile.persona, fallbackProfile);
 
   return {
     id,
     name,
-    persona,
+    persona: name,
     systemPrompt: normalizeOptionalText(profile.systemPrompt)
   };
 }
@@ -131,10 +130,12 @@ function normalizeArbiterProfile(profile, fallbackProfile) {
     return fallbackProfile;
   }
 
+  const name = normalizeText(profile.name ?? profile.persona, fallbackProfile.name);
+
   return {
     id: normalizeText(profile.id, fallbackProfile.id),
-    name: normalizeText(profile.name, fallbackProfile.name),
-    persona: normalizeText(profile.persona, fallbackProfile.persona),
+    name,
+    persona: name,
     systemPrompt: normalizeText(profile.systemPrompt, fallbackProfile.systemPrompt)
   };
 }
@@ -187,44 +188,6 @@ function normalizeSlaveName(value, fallbackProfile) {
   }
 
   return normalized;
-}
-
-function normalizeSlavePersona(value, fallbackProfile, rawName, normalizedName) {
-  const normalized = normalizeText(value, fallbackProfile.persona);
-
-  if (
-    isLegacySlaveName(rawName, fallbackProfile.id) &&
-    normalizedName === fallbackProfile.name &&
-    isLegacySlavePersona(normalized)
-  ) {
-    return fallbackProfile.persona;
-  }
-
-  return normalized;
-}
-
-function isLegacySlavePersona(value) {
-  if (typeof value !== "string") {
-    return false;
-  }
-
-  const trimmed = value.trim();
-
-  if (!trimmed) {
-    return false;
-  }
-
-  return DEFAULT_SLAVE_PERSONAS.some(
-    (template) => trimmed === template || trimmed.toLowerCase().startsWith(`${template.split(":")[0]}:`)
-  );
-}
-
-function isLegacySlaveName(value, id) {
-  if (typeof value !== "string") {
-    return false;
-  }
-
-  return value.trim() === `Agent ${id}`;
 }
 
 function normalizeText(value, fallback) {

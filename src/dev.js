@@ -14,21 +14,7 @@ server.listen(port, "127.0.0.1", () => {
 });
 
 const watchedPaths = [
-  path.join(__dirname, "public"),
-  path.join(__dirname, "agents.js"),
-  path.join(__dirname, "config.js"),
-  path.join(__dirname, "debateOrchestrator.js"),
-  path.join(__dirname, "debateState.js"),
-  path.join(__dirname, "layers.js"),
-  path.join(__dirname, "main.js"),
-  path.join(__dirname, "ollamaClient.js"),
-  path.join(__dirname, "presetStore.js"),
-  path.join(__dirname, "prompts.js"),
-  path.join(__dirname, "retrievalLayer.js"),
-  path.join(__dirname, "sessionInput.js"),
-  path.join(__dirname, "terminalUi.js"),
-  path.join(__dirname, "webServer.js"),
-  path.join(__dirname, "webUi.js")
+  path.join(__dirname, "public")
 ];
 
 let reloadTimer = null;

@@ -106,10 +106,12 @@ function normalizeBot(bot, layerId, index) {
     return null;
   }
 
+  const name = normalizeText(bot.name, normalizeText(bot.persona, `Bot ${index + 1}`));
+
   return {
     id: normalizeIdentifier(bot.id, `${layerId}-bot-${index + 1}`),
-    name: normalizeText(bot.name, `Bot ${index + 1}`),
-    persona: normalizeText(bot.persona, "comportement defini par l'utilisateur"),
+    name,
+    persona: name,
     systemPrompt: normalizeText(bot.systemPrompt, "")
   };
 }

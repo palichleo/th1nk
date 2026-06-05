@@ -265,7 +265,7 @@ function createTerminalUi({ slaveAgents }) {
         "",
         "",
         `==================== ARBITRAGE ${arbitrationIndex} / TOUR ${roundIndex} / REPONSE ${responseIndex} ====================`,
-        `${agent.name} (${agent.persona})`,
+        formatAgentLabel(agent),
         "",
         "Reponse :",
         ""
@@ -284,6 +284,17 @@ function createTerminalUi({ slaveAgents }) {
         ""
       ].join("\n")
     );
+  }
+
+  function formatAgentLabel(agent) {
+    const name = typeof agent.name === "string" ? agent.name.trim() : "";
+    const persona = typeof agent.persona === "string" ? agent.persona.trim() : "";
+
+    if (!persona || persona === name) {
+      return agent.name;
+    }
+
+    return `${agent.name} (${persona})`;
   }
 
   function setStatus(text) {
