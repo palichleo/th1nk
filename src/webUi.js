@@ -1,12 +1,23 @@
-function createWebUi({ layers, sendEvent, session }) {
+const { normalizeText } = require("./normalize");
+
+function createWebUi({
+  conversation,
+  conversationStore,
+  initialTurns = [],
+  layers,
+  sendEvent,
+  session
+}) {
   const state = {
+    conversation: conversation || null,
     layers: layers.map((layer) => createLayerState(layer)),
     session,
     status: "Demarrage...",
-    turns: []
+    turns: normalizeInitialTurns(initialTurns)
   };
   let activeTurnId = null;
-  let turnSequence = 0;
+  const pendingPersistence = [];
+  let turnSequence = getInitialTurnSequence(state.turns);
 
   function createLayerState(layer) {
     return {
@@ -43,7 +54,7 @@ function createWebUi({ layers, sendEvent, session }) {
         turn.content += text;
       }
 
-      emit("append", {
+      emit("token", {
         botId,
         id: botId,
         layerId: layer.id,
@@ -63,7 +74,17 @@ function createWebUi({ layers, sendEvent, session }) {
     });
   }
 
-  function addArbiterHeader({ arbitrationIndex, arbiter }) {
+  function addArbiterHeader({ arbitrationIndex, arbiter, internal = false }) {
+    if (internal) {
+      emit("arbiter_started", {
+        arbiterId: arbiter.id,
+        arbiterName: arbiter.name,
+        arbitrationIndex,
+        internal: true
+      });
+      return;
+    }
+
     startTurn({
       agent: arbiter,
       kind: "arbiter",
@@ -97,12 +118,10 @@ function createWebUi({ layers, sendEvent, session }) {
 
     state.turns.push(turn);
 
-    emit("turnStart", {
+    emit("retrieval_started", {
       turn
     });
-    emit("turnEnd", {
-      turnId: turn.id
-    });
+    persistTurn(turn, "retrieval_done");
   }
 
   function startTurn({ agent, kind, meta, title }) {
@@ -128,9 +147,38 @@ function createWebUi({ layers, sendEvent, session }) {
     state.turns.push(turn);
     activeTurnId = turn.id;
 
-    emit("turnStart", {
+    emit(kind === "arbiter" ? "arbiter_started" : "agent_started", {
       turn
     });
+  }
+
+  function addAssistantAnswer({ content, meta, title, turn }) {
+    completeCurrentTurn();
+
+    const answerTurn = {
+      id: `answer-${turn?.conversationTurnIndex || ++turnSequence}-${Date.now()}`,
+      layerId: "",
+      botId: "",
+      agentName: "th1nk",
+      kind: "answer",
+      meta: normalizeText(meta),
+      role: "assistant",
+      title: normalizeText(title) || "Réponse",
+      content: "",
+      status: "running"
+    };
+
+    state.turns.push(answerTurn);
+    activeTurnId = answerTurn.id;
+
+    emit("agent_started", {
+      turn: answerTurn
+    });
+    appendToActiveTurn({
+      kind: "answer",
+      text: content
+    });
+    completeCurrentTurn();
   }
 
   function completeCurrentTurn() {
@@ -141,12 +189,22 @@ function createWebUi({ layers, sendEvent, session }) {
     const turn = state.turns.find((candidate) => candidate.id === activeTurnId);
     if (turn && turn.status !== "complete") {
       turn.status = "complete";
-      emit("turnEnd", {
-        turnId: turn.id
-      });
+      persistTurn(turn, turn.kind === "arbiter" ? "arbiter_done" : "agent_done");
     }
 
     activeTurnId = null;
+  }
+
+  function addCheckpoint(checkpoint) {
+    if (!conversationStore || !state.conversation?.id) {
+      return;
+    }
+
+    trackPersistence(
+      conversationStore
+        .appendCheckpoint(state.conversation.id, checkpoint)
+        .then(() => emitConversationEvent("checkpoint_saved", { checkpoint }))
+    );
   }
 
   function findLayerAndBot(botId) {
@@ -197,6 +255,23 @@ function createWebUi({ layers, sendEvent, session }) {
     });
   }
 
+  function appendToActiveTurn({ kind, text }) {
+    const turn = state.turns.find((candidate) => candidate.id === activeTurnId);
+
+    if (!turn) {
+      return;
+    }
+
+    const chunk = typeof text === "string" ? text : "";
+    turn.content += chunk;
+    emit("token", {
+      id: turn.id,
+      kind,
+      text: chunk,
+      turnId: turn.id
+    });
+  }
+
   function formatAgentLabel(agent) {
     const name = typeof agent.name === "string" ? agent.name.trim() : "";
     const persona = typeof agent.persona === "string" ? agent.persona.trim() : "";
@@ -209,25 +284,35 @@ function createWebUi({ layers, sendEvent, session }) {
   }
 
   function render() {
-    emit("snapshot", getSnapshot());
+    emit("run_started", {
+      snapshot: getSnapshot()
+    });
   }
 
   function setSessionIntro(intro) {
-    emit("sessionIntro", {
+    emit("run_started", {
       intro
     });
   }
 
   function setStatus(text) {
     state.status = text;
+  }
 
-    emit("status", {
-      text
+  function completeInternalArbiter({ answerToUser, arbiter, arbitrationIndex, checkpoint }) {
+    emit("arbiter_done", {
+      answerToUser,
+      arbiterId: arbiter?.id || "",
+      arbiterName: arbiter?.name || "",
+      arbitrationIndex,
+      checkpoint,
+      internal: true
     });
   }
 
   function getSnapshot() {
     return {
+      conversation: state.conversation,
       layers: state.layers,
       session: state.session,
       status: state.status,
@@ -235,7 +320,81 @@ function createWebUi({ layers, sendEvent, session }) {
     };
   }
 
+  async function flushPersistence() {
+    while (pendingPersistence.length) {
+      await Promise.all(pendingPersistence.splice(0));
+    }
+  }
+
+  async function setConversationStatus(status) {
+    if (!conversationStore || !state.conversation?.id) {
+      return null;
+    }
+
+    const summary = await conversationStore.updateConversationStatus(
+      state.conversation.id,
+      status
+    );
+
+    state.conversation = {
+      ...state.conversation,
+      ...summary
+    };
+
+    return summary;
+  }
+
+  function persistTurn(turn, doneType = null) {
+    if (!conversationStore || !state.conversation?.id || !turn) {
+      return;
+    }
+
+    trackPersistence(
+      conversationStore
+        .appendMessage(state.conversation.id, {
+          ...turn,
+          role: turn.kind === "user" ? "user" : "assistant"
+        })
+        .then(() => {
+          if (!doneType) {
+            return null;
+          }
+
+          return emitConversationEvent(doneType, {
+            turn,
+            turnId: turn.id
+          });
+        })
+    );
+  }
+
+  async function emitConversationEvent(type, payload = {}) {
+    if (!conversationStore || !state.conversation?.id) {
+      return;
+    }
+
+    const conversation = await conversationStore.getConversation(state.conversation.id);
+
+    state.conversation = conversation.summary;
+    emit(type, {
+      ...payload,
+      conversation
+    });
+  }
+
+  function trackPersistence(promise) {
+    pendingPersistence.push(
+      promise.catch((error) => {
+        throw new Error(
+          `Erreur de sauvegarde de conversation : ${error.message || error}`
+        );
+      })
+    );
+  }
+
   return {
+    addAssistantAnswer,
+    addCheckpoint,
     addAgentTurnHeader,
     addArbiterHeader,
     addRetrievalTurn,
@@ -243,11 +402,33 @@ function createWebUi({ layers, sendEvent, session }) {
     appendArbiter,
     appendArbiterToPanel,
     completeCurrentTurn,
+    flushPersistence,
     getSnapshot,
+    completeInternalArbiter,
     render,
+    setConversationStatus,
     setSessionIntro,
     setStatus
   };
+}
+
+function normalizeInitialTurns(turns) {
+  if (!Array.isArray(turns)) {
+    return [];
+  }
+
+  return turns
+    .filter((turn) => turn && typeof turn === "object")
+    .map((turn) => ({ ...turn }));
+}
+
+function getInitialTurnSequence(turns) {
+  return turns.reduce((highest, turn) => {
+    const match = typeof turn.id === "string" ? turn.id.match(/^turn-(\d+)$/) : null;
+    const value = match ? Number(match[1]) : 0;
+
+    return Number.isInteger(value) && value > highest ? value : highest;
+  }, 0);
 }
 
 module.exports = {

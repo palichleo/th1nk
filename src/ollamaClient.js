@@ -1,10 +1,13 @@
-async function checkOllamaModels({ baseUrl, models }) {
+const { debugLog } = require("./logger");
+
+async function checkOllamaModels({ baseUrl, models, signal }) {
   if (typeof fetch !== "function") {
     throw new Error("fetch n'est pas disponible. Utilise Node.js 18 ou superieur.");
   }
 
   const response = await fetch(`${baseUrl}/api/tags`, {
-    method: "GET"
+    method: "GET",
+    signal
   });
 
   if (!response.ok) {
@@ -44,7 +47,8 @@ async function askAgentStreaming({
   think,
   agent,
   input,
-  onToken
+  onToken,
+  signal
 }) {
   agent.messages.push({
     role: "user",
@@ -62,10 +66,10 @@ async function askAgentStreaming({
     requestBody.think = think;
   }
 
-  logLlmDebug({
+  logLlmRequest({
     agent: formatDebugAgent(agent),
-    input,
-    messages: requestBody.messages,
+    inputLength: input.length,
+    messageCount: requestBody.messages.length,
     metadata: debugMetadata || null,
     model,
     options,
@@ -74,17 +78,17 @@ async function askAgentStreaming({
       : null
   });
 
-  let response = await postChat({ baseUrl, body: requestBody });
+  let response = await postChat({ baseUrl, body: requestBody, signal });
 
   if (!response.ok) {
     const errorText = await response.text();
 
     if (shouldRetryWithoutThink({ response, errorText, requestBody })) {
       delete requestBody.think;
-      logLlmDebug({
+      logLlmRequest({
         agent: formatDebugAgent(agent),
-        input,
-        messages: requestBody.messages,
+        inputLength: input.length,
+        messageCount: requestBody.messages.length,
         metadata: {
           ...(debugMetadata || {}),
           retryReason: "think unsupported"
@@ -93,7 +97,7 @@ async function askAgentStreaming({
         options,
         think: null
       });
-      response = await postChat({ baseUrl, body: requestBody });
+      response = await postChat({ baseUrl, body: requestBody, signal });
     } else {
       throw new Error(
         `Erreur Ollama : ${response.status} ${response.statusText}\n${errorText}`
@@ -109,7 +113,7 @@ async function askAgentStreaming({
     );
   }
 
-  let fullAnswer = await readOllamaStream(response, onToken);
+  let fullAnswer = await readOllamaStream(response, onToken, signal);
 
   if (!fullAnswer.trim()) {
     fullAnswer =
@@ -126,18 +130,18 @@ async function askAgentStreaming({
     agent: formatDebugAgent(agent),
     metadata: debugMetadata || null,
     model,
-    output: fullAnswer
+    outputLength: fullAnswer.length
   });
 
   return fullAnswer;
 }
 
-function logLlmDebug(payload) {
-  console.log(`[LLM INPUT] ${payload.agent?.name || "agent"}`, payload);
+function logLlmRequest(payload) {
+  debugLog(`[llm] request ${payload.agent?.name || "agent"}`, payload);
 }
 
 function logLlmOutput(payload) {
-  console.log(`[LLM OUTPUT] ${payload.agent?.name || "agent"}`, payload);
+  debugLog(`[llm] response ${payload.agent?.name || "agent"}`, payload);
 }
 
 function formatDebugAgent(agent) {
@@ -149,13 +153,14 @@ function formatDebugAgent(agent) {
   };
 }
 
-async function postChat({ baseUrl, body }) {
+async function postChat({ baseUrl, body, signal }) {
   return fetch(`${baseUrl}/api/chat`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json"
     },
-    body: JSON.stringify(body)
+    body: JSON.stringify(body),
+    signal
   });
 }
 
@@ -168,7 +173,7 @@ function shouldRetryWithoutThink({ response, errorText, requestBody }) {
   );
 }
 
-async function readOllamaStream(response, onToken) {
+async function readOllamaStream(response, onToken, signal) {
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
 
@@ -176,6 +181,11 @@ async function readOllamaStream(response, onToken) {
   let fullAnswer = "";
 
   while (true) {
+    if (signal?.aborted) {
+      await reader.cancel().catch(() => {});
+      throwAbortError();
+    }
+
     const { value, done } = await reader.read();
 
     if (done) {
@@ -214,6 +224,12 @@ async function readOllamaStream(response, onToken) {
   }
 
   return fullAnswer;
+}
+
+function throwAbortError() {
+  const error = new Error("Run annulé.");
+  error.name = "AbortError";
+  throw error;
 }
 
 function getVisibleToken(data) {

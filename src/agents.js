@@ -2,6 +2,7 @@ const {
   buildArbiterSystemPrompt,
   buildSlaveSystemPrompt
 } = require("./prompts");
+const { normalizeText } = require("./normalize");
 
 const DEFAULT_SLAVE_PERSONAS = [
   "architecte: propose une structure claire, modulaire et maintenable",
@@ -121,7 +122,7 @@ function normalizeSlaveProfile(profile, fallbackProfile) {
     id,
     name,
     persona: name,
-    systemPrompt: normalizeOptionalText(profile.systemPrompt)
+    systemPrompt: normalizeText(profile.systemPrompt)
   };
 }
 
@@ -188,24 +189,6 @@ function normalizeSlaveName(value, fallbackProfile) {
   }
 
   return normalized;
-}
-
-function normalizeText(value, fallback) {
-  if (typeof value !== "string") {
-    return fallback;
-  }
-
-  const trimmed = value.trim();
-
-  return trimmed || fallback;
-}
-
-function normalizeOptionalText(value) {
-  if (typeof value !== "string") {
-    return "";
-  }
-
-  return value.trim();
 }
 
 module.exports = {

@@ -133,6 +133,7 @@ textarea:focus-visible {
 .history-item {
   overflow: hidden;
   padding: 0 11px;
+  border-radius: 8px 0 0 8px;
   color: var(--muted);
   font-size: 0.82rem;
   text-overflow: ellipsis;
@@ -149,6 +150,32 @@ textarea:focus-visible {
   gap: 8px;
   min-height: 0;
   margin-top: 18px;
+}
+
+.history-list {
+  display: grid;
+  gap: 6px;
+  min-height: 0;
+}
+
+.history-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 34px;
+}
+
+.history-delete {
+  min-height: 38px;
+  border: 1px solid var(--line);
+  border-left: 0;
+  border-radius: 0 8px 8px 0;
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 1rem;
+  font-weight: 700;
+}
+
+.history-delete:hover {
+  color: var(--danger);
 }
 
 .sidebar-label {

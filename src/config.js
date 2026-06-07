@@ -1,6 +1,7 @@
 const path = require("path");
 
 const CONFIG = {
+  conversationDirectory: path.join(__dirname, "..", "data", "conversations"),
   dataDirectory: path.join(__dirname, "..", ".th1nk"),
   ollamaBaseUrl: "http://localhost:11434",
 
@@ -32,6 +33,13 @@ const CONFIG = {
   context: {
     recentResponsesForAgents: 9,
     recentResponsesForArbiter: 9
+  },
+
+  conversationHistory: {
+    enabled: true,
+    chunkSize: 1200,
+    chunkOverlap: 160,
+    topK: 4
   },
 
   ollamaOptions: {

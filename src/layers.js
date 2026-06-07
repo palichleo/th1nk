@@ -4,6 +4,7 @@ const {
   createDefaultSlaveProfiles,
   createSlaveAgents
 } = require("./agents");
+const { normalizeText } = require("./normalize");
 
 const CHATBOT_PURPOSES = new Set(["debate", "arbitrate"]);
 
@@ -203,16 +204,6 @@ function normalizeIdentifier(value, fallback) {
     .replace(/^-+|-+$/g, "");
 
   return normalized || fallback;
-}
-
-function normalizeText(value, fallback) {
-  if (typeof value !== "string") {
-    return fallback;
-  }
-
-  const trimmed = value.trim();
-
-  return trimmed || fallback;
 }
 
 function clampInteger(value, fallback, min, max) {

@@ -2,6 +2,8 @@ const { createHash, randomBytes } = require("node:crypto");
 const fs = require("node:fs/promises");
 const path = require("node:path");
 
+const { nonNegativeInteger, positiveInteger } = require("./normalize");
+
 const SUPPORTED_EXTENSIONS = new Set([
   ".txt",
   ".md",
@@ -21,7 +23,12 @@ const DEFAULT_TOP_K = 5;
 
 const indexCache = new Map();
 
-async function buildRetrievalContext({ dataDirectory, layer, query } = {}) {
+async function buildRetrievalContext({
+  dataDirectory,
+  excludeRelativePaths = [],
+  layer,
+  query
+} = {}) {
   const startedAt = Date.now();
   const vectorDatabaseDirectory = resolveVectorDatabaseDirectory(dataDirectory);
   const config =
@@ -58,7 +65,9 @@ async function buildRetrievalContext({ dataDirectory, layer, query } = {}) {
       );
     }
 
-    const scan = await scanDirectory(directory);
+    const scan = await scanDirectory(directory, {
+      excludeRelativePaths
+    });
     const signature = createFileSignature(scan.files);
     const cacheKey = createCacheKey(directory, options);
     let index = indexCache.get(cacheKey);
@@ -130,9 +139,12 @@ function normalizeOptions(config) {
   };
 }
 
-async function scanDirectory(rootDirectory) {
+async function scanDirectory(rootDirectory, { excludeRelativePaths = [] } = {}) {
   const files = [];
   const errors = [];
+  const excludedPaths = new Set(
+    excludeRelativePaths.map((filePath) => toPortablePath(String(filePath || "")))
+  );
 
   async function visit(directory) {
     let entries;
@@ -162,12 +174,18 @@ async function scanDirectory(rootDirectory) {
         continue;
       }
 
+      const relativePath = toPortablePath(path.relative(rootDirectory, absolutePath));
+
+      if (excludedPaths.has(relativePath)) {
+        continue;
+      }
+
       try {
         const stat = await fs.stat(absolutePath);
 
         files.push({
           absolutePath,
-          relativePath: toPortablePath(path.relative(rootDirectory, absolutePath)),
+          relativePath,
           size: stat.size,
           mtimeMs: stat.mtimeMs
         });
@@ -491,16 +509,6 @@ function emptyResult(baseStats, startedAt, errorMessage) {
       errors: errorMessage ? [errorMessage] : []
     }
   };
-}
-
-function positiveInteger(value, fallback) {
-  const number = Number(value);
-  return Number.isFinite(number) && number >= 1 ? Math.floor(number) : fallback;
-}
-
-function nonNegativeInteger(value, fallback) {
-  const number = Number(value);
-  return Number.isFinite(number) && number >= 0 ? Math.floor(number) : fallback;
 }
 
 function roundScore(score) {

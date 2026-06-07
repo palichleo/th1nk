@@ -1,13 +1,25 @@
-function createDebateState({ initialRequest }) {
+const { normalizeText } = require("./normalize");
+
+function createDebateState({ initialRequest, previousCheckpoint, turn }) {
   const agentResponses = [];
   const arbitrations = [];
+  const currentTask = normalizeText(turn?.currentTask) || initialRequest;
+  const previousCheckpointText =
+    normalizeText(previousCheckpoint?.content) ||
+    normalizeText(turn?.latestCheckpoint?.content) ||
+    "Aucun etat precedent.";
 
   return {
     addAgentResponse(response) {
-      agentResponses.push({
+      const storedResponse = {
         ...response,
         createdAt: new Date().toISOString()
-      });
+      };
+
+      agentResponses.push(storedResponse);
+      if (Array.isArray(turn?.agentResponses)) {
+        turn.agentResponses.push(storedResponse);
+      }
     },
 
     addArbitration(arbitration) {
@@ -24,21 +36,11 @@ function createDebateState({ initialRequest }) {
     getPreviousArbitrationText() {
       const lastArbitration = arbitrations.at(-1);
 
-      return lastArbitration?.content || "Aucun etat precedent.";
+      return lastArbitration?.content || previousCheckpointText;
     },
 
     getCurrentTask() {
-      const lastArbitration = arbitrations.at(-1);
-
-      if (!lastArbitration) {
-        return initialRequest;
-      }
-
-      return (
-        extractMarkdownSection(lastArbitration.content, "Prochaine tâche des agents") ||
-        extractMarkdownSection(lastArbitration.content, "Prochaine tache des agents") ||
-        lastArbitration.content
-      ).trim();
+      return currentTask;
     },
 
     getRecentAgentResponses(limit) {
@@ -52,30 +54,6 @@ function createDebateState({ initialRequest }) {
       };
     }
   };
-}
-
-function extractMarkdownSection(markdown, heading) {
-  const expectedHeading = `## ${heading}`.toLowerCase();
-  const lines = markdown.split(/\r?\n/);
-  const startIndex = lines.findIndex(
-    (line) => line.trim().toLowerCase() === expectedHeading
-  );
-
-  if (startIndex === -1) {
-    return "";
-  }
-
-  const sectionLines = [];
-
-  for (let index = startIndex + 1; index < lines.length; index++) {
-    if (/^##\s+/.test(lines[index].trim())) {
-      break;
-    }
-
-    sectionLines.push(lines[index]);
-  }
-
-  return sectionLines.join("\n");
 }
 
 module.exports = {

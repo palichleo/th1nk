@@ -9,6 +9,12 @@
     chunkOverlap: 120,
     topK: 6
   };
+  const INTERNAL_TURN_KINDS = new Set([
+    "checkpoint",
+    "debug",
+    "internal_state",
+    "metadata"
+  ]);
 
   const elements = {
     addChatbotsLayerButton: document.querySelector("#addChatbotsLayerButton"),
@@ -21,6 +27,7 @@
     configDialog: document.querySelector("#configDialog"),
     configToggleButton: document.querySelector("#configToggleButton"),
     conversationScroll: document.querySelector("#conversationScroll"),
+    historyList: document.querySelector("#historyList"),
     layersWorkspace: document.querySelector("#layersWorkspace"),
     newConversationButton: document.querySelector("#newConversationButton"),
     openPresetsButton: document.querySelector("#openPresetsButton"),
@@ -41,9 +48,13 @@
 
   const state = {
     config: null,
+    activeConversationId: null,
     conversation: null,
     conversationNodes: null,
+    currentRunId: null,
     finalAnswerText: "",
+    history: [],
+    lastEventId: "0",
     layers: [],
     reasoningBlocks: new Map(),
     pendingPreset: null,
@@ -53,6 +64,7 @@
       bots: [],
       layers: []
     },
+    runEventSource: null,
     running: false
   };
 
@@ -68,7 +80,7 @@
       state.layers = loadWorkspaceLayers();
       renderLayers();
       renderConversationPreview();
-      connectEvents();
+      await loadConversations();
       setStatus("Prêt.");
     } catch (error) {
       console.error(error);
@@ -452,10 +464,12 @@
 
     state.conversation = null;
     state.conversationNodes = null;
+    state.activeConversationId = null;
     state.reasoningBlocks.clear();
     elements.requestInput.value = "";
     persistWorkspace();
     renderConversation();
+    renderHistory();
     setStatus("Nouvelle conversation prête.");
   }
 
@@ -575,6 +589,171 @@
       layer.config.chunkOverlap,
       Math.max(0, layer.config.chunkSize - 1)
     );
+  }
+
+  async function loadConversations() {
+    try {
+      const response = await fetchJson("/api/conversations");
+      const conversations = Array.isArray(response?.conversations)
+        ? response.conversations
+        : [];
+
+      state.history = conversations
+        .map(normalizeConversationSummary)
+        .filter((conversation) => conversation.id);
+      renderHistory();
+    } catch (error) {
+      console.error(error);
+      elements.historyList.replaceChildren(
+        createEmptyState(error.message || "Historique indisponible.")
+      );
+    }
+  }
+
+  function renderHistory() {
+    elements.historyList.replaceChildren();
+
+    if (!state.history.length) {
+      elements.historyList.append(createEmptyState("Aucune conversation sauvegardée."));
+      return;
+    }
+
+    for (const conversation of state.history) {
+      const row = document.createElement("div");
+      const button = document.createElement("button");
+      const deleteButton = document.createElement("button");
+
+      row.className = "history-row";
+      button.type = "button";
+      button.className = "history-item";
+      button.classList.toggle("is-active", conversation.id === state.activeConversationId);
+      button.textContent = conversation.title;
+      button.title = formatHistoryTooltip(conversation);
+      button.addEventListener("click", () => loadConversation(conversation.id));
+
+      deleteButton.type = "button";
+      deleteButton.className = "history-delete";
+      deleteButton.textContent = "×";
+      deleteButton.setAttribute("aria-label", `Supprimer ${conversation.title}`);
+      deleteButton.addEventListener("click", (event) => {
+        event.stopPropagation();
+        deleteConversation(conversation);
+      });
+
+      row.append(button, deleteButton);
+      elements.historyList.append(row);
+    }
+  }
+
+  async function loadConversation(conversationId) {
+    if (state.running) {
+      setStatus("Attendez la fin de la session avant de charger une conversation.", true);
+      return;
+    }
+
+    try {
+      const response = await fetchJson(
+        `/api/conversations/${encodeURIComponent(conversationId)}`
+      );
+      const conversation = createConversationFromStored(response.conversation);
+
+      state.conversation = conversation;
+      state.activeConversationId = conversation.id;
+      state.finalAnswerText = "";
+      elements.requestInput.value = "";
+      persistWorkspace();
+      renderConversation();
+      upsertHistory(response.conversation?.summary || response.conversation);
+      renderHistory();
+      setStatus(`Conversation "${conversation.title}" chargée.`);
+    } catch (error) {
+      console.error(error);
+      setStatus(error.message || "Chargement de la conversation impossible.", true);
+    }
+  }
+
+  async function deleteConversation(conversation) {
+    if (state.running) {
+      setStatus("Attendez la fin de la session avant de supprimer une conversation.", true);
+      return;
+    }
+
+    if (!window.confirm(`Supprimer la conversation "${conversation.title}" ?`)) {
+      return;
+    }
+
+    try {
+      await fetchJson(`/api/conversations/${encodeURIComponent(conversation.id)}`, {
+        method: "DELETE"
+      });
+
+      if (state.activeConversationId === conversation.id) {
+        state.conversation = null;
+        state.conversationNodes = null;
+        state.activeConversationId = null;
+        state.finalAnswerText = "";
+        renderConversation();
+      }
+
+      state.history = state.history.filter((candidate) => candidate.id !== conversation.id);
+      renderHistory();
+      setStatus(`Conversation "${conversation.title}" supprimée.`);
+    } catch (error) {
+      console.error(error);
+      setStatus(error.message || "Suppression de la conversation impossible.", true);
+    }
+  }
+
+  function upsertHistory(value) {
+    const conversation = normalizeConversationSummary(value);
+
+    if (!conversation.id) {
+      return;
+    }
+
+    state.history = [
+      conversation,
+      ...state.history.filter((candidate) => candidate.id !== conversation.id)
+    ].sort(compareConversationsByDate);
+  }
+
+  function normalizeConversationSummary(value) {
+    return {
+      id: normalizeText(value?.id, ""),
+      title: normalizeText(value?.title, "Conversation sans titre"),
+      createdAt: normalizeText(value?.createdAt, ""),
+      updatedAt: normalizeText(value?.updatedAt, ""),
+      status: normalizeText(value?.status, "running"),
+      messageCount: nonNegativeInteger(value?.messageCount, 0),
+      checkpointCount: nonNegativeInteger(value?.checkpointCount, 0)
+    };
+  }
+
+  function compareConversationsByDate(left, right) {
+    return normalizeText(right.updatedAt, "").localeCompare(normalizeText(left.updatedAt, ""));
+  }
+
+  function formatHistoryTooltip(conversation) {
+    const updatedAt = formatDate(conversation.updatedAt);
+    const status = normalizeText(conversation.status, "running");
+
+    return updatedAt ? `${status} · ${updatedAt}` : status;
+  }
+
+  function formatDate(value) {
+    if (!value) {
+      return "";
+    }
+
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) {
+      return "";
+    }
+
+    return date.toLocaleString("fr-FR", {
+      dateStyle: "short",
+      timeStyle: "short"
+    });
   }
 
   async function openPresets({ kind = state.presetKind, targetLayerId = null } = {}) {
@@ -790,55 +969,195 @@
       return;
     }
 
-    const initialRequest = normalizeText(elements.requestInput.value, "");
-    if (!initialRequest) {
+    const userMessage = normalizeText(elements.requestInput.value, "");
+    if (!userMessage) {
       setStatus("Entrez une question initiale avant de lancer.", true);
       return;
     }
 
-    state.conversation = createConversation({
-      initialRequest,
-      running: true,
-      turns: []
-    });
+    const isContinuation = Boolean(state.activeConversationId);
+    if (isContinuation && !state.conversation) {
+      await loadConversation(state.activeConversationId);
+      if (!state.conversation) {
+        return;
+      }
+    }
+
+    if (isContinuation) {
+      state.conversation.turns.push(createLocalUserTurn(userMessage));
+      state.conversation.running = true;
+    } else {
+      state.conversation = createConversation({
+        initialRequest: userMessage,
+        running: true,
+        turns: []
+      });
+    }
+
     elements.requestInput.value = "";
     persistWorkspace();
     renderConversation();
     setRunning(true);
-    setStatus("Démarrage de la session...");
+    setStatus(isContinuation ? "Continuation de la conversation..." : "Création de la conversation...");
 
     try {
-      await fetchJson("/api/start", {
-        body: JSON.stringify({
-          agentRoundsPerArbitration: Number(elements.roundsSlider.value),
-          initialRequest,
-          layers: clone(state.layers),
-          maxArbitrations: Number(elements.arbitrationsSlider.value)
-        }),
-        headers: { "Content-Type": "application/json" },
-        method: "POST"
-      });
+      const result = isContinuation
+        ? await continueConversation(userMessage)
+        : await createAndRunConversation(userMessage);
+
+      if (result.conversation) {
+        const summary = normalizeConversationSummary(result.conversation);
+
+        state.activeConversationId = summary.id;
+        if (state.conversation) {
+          Object.assign(state.conversation, summary);
+        }
+        upsertHistory(summary);
+        renderHistory();
+      }
+      if (result.runId) {
+        connectRunEvents(result.runId);
+      }
     } catch (error) {
       console.error(error);
       setRunning(false);
-      elements.requestInput.value = initialRequest;
+      elements.requestInput.value = userMessage;
+      if (isContinuation && state.conversation) {
+        state.conversation.turns = state.conversation.turns.filter(
+          (turn) => !turn.localOnly
+        );
+        state.conversation.running = false;
+      }
       persistWorkspace();
       setStatus(error.message || "Échec du lancement.", true);
     }
   }
 
-  function connectEvents() {
-    const events = new EventSource("/events");
-    events.onmessage = (message) => {
-      try {
-        handleServerEvent(JSON.parse(message.data));
-      } catch (error) {
-        console.error("Événement SSE invalide.", error);
+  async function createAndRunConversation(initialRequest) {
+    const created = await fetchJson("/api/conversations", {
+      body: JSON.stringify({
+        config: {
+          models: state.config?.models,
+          tags: []
+        },
+        initialMessage: initialRequest
+      }),
+      headers: { "Content-Type": "application/json" },
+      method: "POST"
+    });
+    const conversation = created.conversation;
+    const summary = normalizeConversationSummary(conversation?.summary || conversation);
+
+    state.activeConversationId = summary.id;
+    if (state.conversation) {
+      Object.assign(state.conversation, summary);
+    }
+    upsertHistory(summary);
+    renderHistory();
+    setStatus("Démarrage de la session...");
+
+    return fetchJson("/api/runs", {
+      body: JSON.stringify({
+        agentRoundsPerArbitration: Number(elements.roundsSlider.value),
+        conversationId: summary.id,
+        userMessage: initialRequest,
+        layers: clone(state.layers),
+        maxArbitrations: Number(elements.arbitrationsSlider.value)
+      }),
+      headers: { "Content-Type": "application/json" },
+      method: "POST"
+    });
+  }
+
+  function continueConversation(userMessage) {
+    return fetchJson("/api/runs", {
+      body: JSON.stringify({
+        agentRoundsPerArbitration: Number(elements.roundsSlider.value),
+        conversationId: state.activeConversationId,
+        layers: clone(state.layers),
+        maxArbitrations: Number(elements.arbitrationsSlider.value),
+        userMessage
+      }),
+      headers: { "Content-Type": "application/json" },
+      method: "POST"
+    });
+  }
+
+  function createLocalUserTurn(content) {
+    const turn = normalizeConversationTurn({
+      id: createId("local-user"),
+      role: "user",
+      kind: "user",
+      agentName: "Utilisateur",
+      content,
+      status: "complete",
+      title: "Message utilisateur"
+    }, state.conversation?.turns.length || 0);
+
+    turn.localOnly = true;
+    return turn;
+  }
+
+  function connectRunEvents(runId) {
+    closeRunEventSource();
+    state.currentRunId = runId;
+    state.lastEventId = "0";
+
+    openRunEventSource();
+  }
+
+  function openRunEventSource() {
+    if (!state.currentRunId) {
+      return;
+    }
+
+    const url = `/api/runs/${encodeURIComponent(state.currentRunId)}/events?lastEventId=${encodeURIComponent(state.lastEventId || "0")}`;
+    const eventSource = new EventSource(url);
+
+    state.runEventSource = eventSource;
+
+    [
+      "run_started",
+      "retrieval_started",
+      "retrieval_done",
+      "agent_started",
+      "token",
+      "agent_done",
+      "arbiter_started",
+      "arbiter_done",
+      "checkpoint_saved",
+      "run_done",
+      "run_error"
+    ].forEach((type) => {
+      eventSource.addEventListener(type, handleRunEvent);
+    });
+
+    eventSource.onerror = () => {
+      if (!state.currentRunId || !state.running) {
+        return;
       }
-    };
-    events.onerror = () => {
+
       setStatus("Connexion événementielle perdue. Reconnexion automatique...", true);
     };
+  }
+
+  function closeRunEventSource() {
+    if (state.runEventSource) {
+      state.runEventSource.close();
+      state.runEventSource = null;
+    }
+  }
+
+  function handleRunEvent(message) {
+    try {
+      if (message.lastEventId) {
+        state.lastEventId = message.lastEventId;
+      }
+
+      handleServerEvent(JSON.parse(message.data));
+    } catch (error) {
+      console.error("Événement SSE invalide.", error);
+    }
   }
 
   function hasRunnableChatbots(purpose) {
@@ -852,36 +1171,105 @@
   }
 
   function handleServerEvent(event) {
-    const payload = event?.payload || {};
+    const payload = event?.data || event?.payload || {};
 
-    if (event.type === "hello" || event.type === "running") {
-      setRunning(Boolean(payload.running));
+    if (event?.runId) {
+      state.currentRunId = event.runId;
+    }
+
+    if (event.type === "run_started") {
+      setRunning(true);
+      if (payload.snapshot) {
+        renderSnapshot(payload.snapshot);
+      }
+      if (payload.intro) {
+        setStatus("Session multi-agent démarrée.");
+      }
       return;
     }
-    if (event.type === "snapshot") {
-      renderSnapshot(payload);
+
+    if (event.type === "retrieval_started") {
+      setStatus(payload.message || "Préparation du contexte documentaire...");
+      if (payload.turn) {
+        startConversationTurn(payload.turn);
+      }
       return;
     }
-    if (event.type === "sessionIntro") {
-      setStatus(payload.intro);
+
+    if (event.type === "retrieval_done") {
+      if (payload.turnId) {
+        completeConversationTurn(payload.turnId);
+      }
+      if (payload.conversation) {
+        replaceCurrentConversation(payload.conversation);
+      }
+      setStatus("Contexte documentaire prêt.");
       return;
     }
-    if (event.type === "status") {
-      setStatus(payload.text);
+
+    if (event.type === "agent_started" || event.type === "arbiter_started") {
+      if (payload.internal) {
+        setStatus(
+          event.type === "arbiter_started"
+            ? "Arbitrage interne en cours..."
+            : "Traitement interne en cours..."
+        );
+        return;
+      }
+
+      startConversationTurn(payload.turn);
+      setStatus(
+        event.type === "arbiter_started"
+          ? "Arbitrage en cours..."
+          : "Agent en cours de réflexion..."
+      );
       return;
     }
-    if (event.type === "append") {
+
+    if (event.type === "token") {
       appendConversationOutput(payload);
       return;
     }
-    if (event.type === "turnStart") {
-      startConversationTurn(payload.turn);
-      return;
-    }
-    if (event.type === "turnEnd") {
+
+    if (event.type === "agent_done" || event.type === "arbiter_done") {
+      if (payload.internal) {
+        setStatus("Arbitrage interne terminé.");
+        return;
+      }
+
       completeConversationTurn(payload.turnId);
+      if (payload.conversation) {
+        replaceCurrentConversation(payload.conversation);
+      }
       return;
     }
+
+    if (event.type === "checkpoint_saved") {
+      if (payload.conversation) {
+        replaceCurrentConversation(payload.conversation);
+      }
+      return;
+    }
+
+    if (event.type === "run_done") {
+      setRunning(false);
+      if (payload.conversation) {
+        replaceCurrentConversation(payload.conversation);
+      }
+      closeRunEventSource();
+      loadConversations();
+      setStatus("Débat terminé.");
+      return;
+    }
+
+    if (event.type === "run_error") {
+      setRunning(false);
+      closeRunEventSource();
+      loadConversations();
+      setStatus(payload.message || "Erreur du run.", true);
+      return;
+    }
+
     if (event.type === "reload") {
       window.location.reload();
     }
@@ -889,8 +1277,34 @@
 
   function renderSnapshot(snapshot) {
     state.conversation = createConversationFromSnapshot(snapshot);
+    if (state.conversation.id) {
+      state.activeConversationId = state.conversation.id;
+      upsertHistory(snapshot?.conversation);
+      renderHistory();
+    }
     renderConversation();
     setStatus(snapshot?.status || "Session en cours.");
+  }
+
+  function replaceCurrentConversation(conversation) {
+    if (!conversation?.id) {
+      return;
+    }
+
+    if (
+      state.activeConversationId &&
+      state.activeConversationId !== conversation.id
+    ) {
+      return;
+    }
+
+    state.conversation = createConversationFromStored(conversation, {
+      running: state.running
+    });
+    state.activeConversationId = state.conversation.id;
+    upsertHistory(conversation.summary || conversation);
+    renderHistory();
+    renderConversation();
   }
 
   function normalizeSnapshotLayers(snapshot) {
@@ -928,26 +1342,42 @@
       return;
     }
 
-    const conversation = cloneTemplate("#conversationTemplate");
-    const nodes = {
-      answer: conversation.querySelector(".final-answer"),
-      reasoningList: conversation.querySelector(".reasoning-list"),
-      userMessage: conversation.querySelector(".user-message")
-    };
+    const segments = createConversationSegments(state.conversation);
 
-    nodes.userMessage.textContent = state.conversation.initialRequest;
+    segments.forEach((segment, index) => {
+      const conversation = cloneTemplate("#conversationTemplate");
+      const nodes = {
+        answer: conversation.querySelector(".final-answer"),
+        reasoningList: conversation.querySelector(".reasoning-list"),
+        turns: segment.turns,
+        userMessage: conversation.querySelector(".user-message")
+      };
 
-    for (const turn of state.conversation.turns) {
-      appendThinkingTurn(nodes, turn);
-    }
+      nodes.userMessage.textContent = segment.userMessage;
 
-    state.conversationNodes = nodes;
-    updateConversationSummary();
-    elements.conversationWorkspace.append(conversation);
+      for (const turn of segment.turns) {
+        appendThinkingTurn(nodes, turn);
+      }
+
+      renderConversationSummary(nodes, {
+        running: state.conversation.running && index === segments.length - 1,
+        turns: segment.turns
+      });
+
+      if (index === segments.length - 1) {
+        state.conversationNodes = nodes;
+      }
+
+      elements.conversationWorkspace.append(conversation);
+    });
     scrollConversationToBottom();
   }
 
   function appendThinkingTurn(nodes, turn) {
+    if (isUserTurn(turn) || turn.kind === "answer" || isInternalTurn(turn)) {
+      return;
+    }
+
     const turnElement = cloneTemplate("#thinkingTurnTemplate");
     const content = turnElement.querySelector("pre");
 
@@ -962,12 +1392,57 @@
     content.textContent = sanitizeVisibleModelText(turn.content, turn);
 
     nodes.reasoningList.append(turnElement);
+    nodes.turns = nodes.turns || [];
+    if (!nodes.turns.some((candidate) => candidate.id === turn.id)) {
+      nodes.turns.push(turn);
+    }
     registerReasoningBlock(turn, turnElement);
   }
 
-  function createConversation({ initialRequest, running, turns }) {
+  function createConversationSegments(conversation) {
+    const segments = [{
+      turns: [],
+      userMessage: conversation.initialRequest
+    }];
+
+    for (const turn of conversation.turns) {
+      if (isUserTurn(turn)) {
+        segments.push({
+          turns: [],
+          userMessage: turn.content
+        });
+        continue;
+      }
+
+      if (isInternalTurn(turn)) {
+        continue;
+      }
+
+      segments[segments.length - 1].turns.push(turn);
+    }
+
+    return segments.filter((segment) => segment.userMessage || segment.turns.length);
+  }
+
+  function createConversation({
+    checkpoints,
+    createdAt,
+    id,
+    initialRequest,
+    running,
+    status,
+    title,
+    turns,
+    updatedAt
+  }) {
     return {
+      id: normalizeText(id, ""),
       initialRequest: normalizeText(initialRequest, ""),
+      title: normalizeText(title, "Conversation sans titre"),
+      createdAt: normalizeText(createdAt, ""),
+      updatedAt: normalizeText(updatedAt, ""),
+      status: normalizeText(status, running ? "running" : "complete"),
+      checkpoints: Array.isArray(checkpoints) ? checkpoints : [],
       running: Boolean(running),
       turns: normalizeConversationTurns(turns)
     };
@@ -977,11 +1452,36 @@
     const turns = Array.isArray(snapshot?.turns)
       ? snapshot.turns
       : deriveTurnsFromSnapshotLayers(snapshot);
+    const metadata = snapshot?.conversation || {};
 
     return createConversation({
-      initialRequest: snapshot?.session?.initialRequest,
+      id: metadata.id,
+      title: metadata.title,
+      createdAt: metadata.createdAt,
+      updatedAt: metadata.updatedAt,
+      status: metadata.status,
+      checkpoints: metadata.checkpoints,
+      initialRequest: metadata.initialRequest || snapshot?.session?.initialRequest,
       running: state.running,
       turns
+    });
+  }
+
+  function createConversationFromStored(conversation, { running = false } = {}) {
+    return createConversation({
+      id: conversation?.id,
+      title: conversation?.title,
+      createdAt: conversation?.createdAt,
+      updatedAt: conversation?.updatedAt,
+      status: conversation?.status,
+      checkpoints: Array.isArray(conversation?.checkpoints) ? conversation.checkpoints : [],
+      initialRequest: conversation?.initialRequest,
+      running,
+      turns: Array.isArray(conversation?.turns)
+        ? conversation.turns
+        : Array.isArray(conversation?.messages)
+          ? conversation.messages
+          : []
     });
   }
 
@@ -1039,13 +1539,23 @@
       kind,
       layerId: normalizeText(turn.layerId, ""),
       meta: normalizeText(turn.meta, ""),
+      role: normalizeText(turn.role, kind === "user" ? "user" : "assistant"),
       status: turn.status === "complete" ? "complete" : "running",
       title: normalizeText(turn.title, getDefaultTurnTitle(kind, agentName))
     };
   }
 
   function normalizeConversationTurnKind(kind) {
-    if (kind === "arbiter" || kind === "retrieval") {
+    if (
+      kind === "answer" ||
+      kind === "arbiter" ||
+      kind === "checkpoint" ||
+      kind === "debug" ||
+      kind === "internal_state" ||
+      kind === "metadata" ||
+      kind === "retrieval" ||
+      kind === "user"
+    ) {
       return kind;
     }
 
@@ -1059,6 +1569,15 @@
     if (kind === "retrieval") {
       return "Retrieval";
     }
+    if (kind === "user") {
+      return "Utilisateur";
+    }
+    if (kind === "answer") {
+      return "th1nk";
+    }
+    if (INTERNAL_TURN_KINDS.has(kind)) {
+      return "Interne";
+    }
 
     return "Agent";
   }
@@ -1070,8 +1589,25 @@
     if (kind === "retrieval") {
       return `Retrieval - ${agentName}`;
     }
+    if (kind === "user") {
+      return "Message utilisateur";
+    }
+    if (kind === "answer") {
+      return "Réponse";
+    }
+    if (INTERNAL_TURN_KINDS.has(kind)) {
+      return "État interne";
+    }
 
     return `Thinking about ${agentName}...`;
+  }
+
+  function isUserTurn(turn) {
+    return turn?.role === "user" || turn?.kind === "user";
+  }
+
+  function isInternalTurn(turn) {
+    return INTERNAL_TURN_KINDS.has(turn?.kind) || isInternalStateText(turn?.content);
   }
 
   function startConversationTurn(turn) {
@@ -1135,8 +1671,19 @@
 
     state.conversation.turns.push(normalizedTurn);
 
+    if (isInternalTurn(normalizedTurn)) {
+      updateConversationSummary();
+      return;
+    }
+
     if (!state.conversationNodes) {
       renderConversation();
+      return;
+    }
+
+    if (normalizedTurn.kind === "answer") {
+      updateConversationSummary();
+      scrollConversationToBottom();
       return;
     }
 
@@ -1369,15 +1916,21 @@
       return;
     }
 
-    const completedOutputTurns = [...state.conversation.turns]
-      .filter((turn) => turn.kind !== "retrieval" && normalizeContent(turn.content).trim());
-    const latestArbiterTurn = [...completedOutputTurns]
+    renderConversationSummary(nodes, {
+      running: state.conversation.running,
+      turns: nodes.turns || state.conversation.turns
+    });
+  }
+
+  function renderConversationSummary(nodes, { running, turns }) {
+    const latestAnswerTurn = [...turns]
       .reverse()
-      .find((turn) => turn.kind === "arbiter");
-    const fallbackTurn = [...completedOutputTurns].reverse()[0];
-    const finalTurn = state.conversation.running
-      ? null
-      : latestArbiterTurn || fallbackTurn || null;
+      .find((turn) =>
+        turn.kind === "answer" &&
+        !isInternalTurn(turn) &&
+        normalizeContent(turn.content).trim()
+      );
+    const finalTurn = latestAnswerTurn || null;
     const answer = sanitizeVisibleModelText(finalTurn?.content, finalTurn).trim();
 
     if (answer) {
@@ -1386,17 +1939,39 @@
         state.finalAnswerText = answer;
       }
     } else {
-      nodes.answer.textContent = state.conversation.running
+      nodes.answer.textContent = running
         ? "Thinking..."
         : "La réponse finale apparaîtra ici.";
       state.finalAnswerText = "";
     }
 
-    nodes.answer.classList.toggle("is-waiting", !answer && state.conversation.running);
+    nodes.answer.classList.toggle("is-waiting", !answer && running);
     nodes.answer.classList.toggle("is-empty", !answer);
   }
 
   function appendConversationOutput(payload) {
+    const existingTurn = findConversationTurnForPayload(payload);
+    if (existingTurn?.kind === "answer" || payload?.kind === "answer") {
+      const text = normalizeContent(payload.text ?? payload.content);
+      if (isInternalStateText(text)) {
+        return;
+      }
+
+      const answerTurn = existingTurn || createLiveConversationTurn({
+        ...payload,
+        kind: "answer"
+      });
+
+      if (!existingTurn) {
+        state.conversation.turns.push(answerTurn);
+      }
+
+      answerTurn.content += text;
+      updateConversationSummary();
+      scrollConversationToBottom();
+      return;
+    }
+
     const panel = ensureReasoningBlockForPayload(payload);
 
     if (!panel) {
@@ -1521,73 +2096,84 @@
     elements.statusText.classList.toggle("is-error", isError);
   }
 
-  function sanitizeVisibleModelText(value, turn = null) {
-  const agentName = normalizeText(turn?.agentName, "");
-  let text = normalizeContent(value).replace(/\r\n/g, "\n");
+  function sanitizeVisibleModelText(value) {
+    const text = normalizeContent(value).replace(/\r\n/g, "\n");
 
-  text = text
-    .split("\n")
-    .filter((line) => !isTechnicalTranscriptHeader(line))
-    .join("\n");
-
-  return stripLeadingVisibleWrappers(text, agentName);
-}
-
-function stripLeadingVisibleWrappers(text, agentName = "") {
-  const lines = text.split("\n");
-
-  const agentPattern = agentName
-    ? new RegExp(`^${escapeRegExp(agentName)}\\s*:?$`, "i")
-    : null;
-
-  const labelPattern =
-    /^(?:R[eé]ponse|REPONSE|RÉPONSE|Synth[eè]se|SYNTHESE|Synthèse|SYNTHÈSE)\s*:\s*(.*)$/i;
-
-  while (lines.length > 0) {
-    const rawLine = lines[0] ?? "";
-    const trimmedLine = rawLine.trim();
-
-    if (!trimmedLine) {
-      lines.shift();
-      continue;
-    }
-
-    if (isTechnicalTranscriptHeader(trimmedLine)) {
-      lines.shift();
-      continue;
-    }
-
-    if (agentPattern && agentPattern.test(trimmedLine)) {
-      lines.shift();
-      continue;
-    }
-
-    const labelMatch = trimmedLine.match(labelPattern);
-    if (labelMatch) {
-      lines.shift();
-
-      const restOfLine = normalizeText(labelMatch[1], "");
-      if (restOfLine) {
-        lines.unshift(restOfLine);
-      }
-
-      continue;
-    }
-
-    break;
+    return isInternalStateText(text) ? "" : text;
   }
 
-  return lines.join("\n").replace(/^\s+/, "");
-}
-
-  function isTechnicalTranscriptHeader(line) {
-    const normalizedLine = normalizeText(line, "");
-    if (!normalizedLine) {
+  function isInternalStateText(value) {
+    const text = normalizeContent(value).trim();
+    if (!text) {
       return false;
     }
 
-    return /^={2,}.*(?:ARBITRAGE|TOUR|R[EÉ]PONSE|REPONSE|SYNTH[EÈ]SE|SYNTHESE).*={2,}.*$/i
-      .test(normalizedLine);
+    const parsed = extractJsonObjectFromText(text);
+    if (isCheckpointLikeObject(parsed) || isCheckpointOnlyWrapper(parsed)) {
+      return true;
+    }
+
+    return (
+      /"checkpointId"\s*:/.test(text) &&
+      /"currentTask"\s*:/.test(text) &&
+      /"validatedDecisions"\s*:/.test(text)
+    );
+  }
+
+  function extractJsonObjectFromText(value) {
+    const text = normalizeContent(value).trim();
+    const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
+    const candidates = [
+      fenced?.[1],
+      text,
+      text.includes("{") && text.includes("}")
+        ? text.slice(text.indexOf("{"), text.lastIndexOf("}") + 1)
+        : ""
+    ].filter(Boolean);
+
+    for (const candidate of candidates) {
+      try {
+        const parsed = JSON.parse(candidate.trim());
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+          return parsed;
+        }
+      } catch {
+        // Try the next candidate.
+      }
+    }
+
+    return null;
+  }
+
+  function isCheckpointOnlyWrapper(value) {
+    return Boolean(
+      value &&
+      typeof value === "object" &&
+      !Array.isArray(value) &&
+      value.checkpoint &&
+      typeof value.checkpoint === "object" &&
+      !normalizeContent(value.answerToUser).trim()
+    );
+  }
+
+  function isCheckpointLikeObject(value) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      return false;
+    }
+
+    return Boolean(
+      value.checkpointId ||
+        value.userTurnId ||
+        value.currentTask ||
+        value.validatedDecisions ||
+        value.hypotheses ||
+        value.proposedIdeas ||
+        value.disagreements ||
+        value.risks ||
+        value.pointsToVerify ||
+        value.openQuestions ||
+        value.nextUsefulStep
+    );
   }
 
   function renderMarkdown(source) {
@@ -1714,10 +2300,6 @@ function stripLeadingVisibleWrappers(text, agentName = "") {
       .replace(/>/g, "&gt;")
       .replace(/"/g, "&quot;")
       .replace(/'/g, "&#39;");
-  }
-
-  function escapeRegExp(value) {
-    return normalizeText(value, "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   }
 
   async function fetchJson(url, options) {

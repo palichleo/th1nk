@@ -8,9 +8,18 @@ const {
   createRuntimeFromLayers,
   normalizeLayers
 } = require("./layers");
+const { debugLog, errorLog } = require("./logger");
 const { checkOllamaModels } = require("./ollamaClient");
 const { createPresetStore } = require("./presetStore");
 const { buildRetrievalContext } = require("./retrievalLayer");
+const { buildConversationRetrievalContext } = require("./server/retrieval/conversationIndexer");
+const { createConversationsRoute } = require("./server/routes/conversations");
+const { createRunManager } = require("./server/runs/runManager");
+const { createConversationMarkdownStore } = require("./server/storage/conversationMarkdownStore");
+const {
+  buildTurnContext,
+  prepareConversationTurn
+} = require("./server/storage/turnContext");
 const { createWebUi } = require("./webUi");
 
 const STATIC_TYPES = {
@@ -21,20 +30,68 @@ const STATIC_TYPES = {
 
 function createWebServer({ config }) {
   const publicDir = path.join(__dirname, "public");
-  const clients = new Set();
+  const devClients = new Set();
   const presetStore = createPresetStore({
     dataDirectory: config.dataDirectory
   });
-
-  let currentUi = null;
-  let isRunning = false;
+  const conversationStore = createConversationMarkdownStore({
+    directory: config.conversationDirectory
+  });
+  const runManager = createRunManager();
+  const handleConversationsRoute = createConversationsRoute({
+    readJsonBody,
+    sendJson,
+    store: conversationStore
+  });
 
   const server = http.createServer(async (request, response) => {
     try {
       const requestUrl = new URL(request.url, "http://localhost");
+      const runEventsRoute = parseRunEventsRoute(requestUrl);
+      const runCancelRoute = parseRunCancelRoute(requestUrl);
+      const messageRoute = parseConversationMessageRoute(requestUrl);
 
       if (request.method === "GET" && requestUrl.pathname === "/events") {
-        handleEvents(request, response);
+        handleDevEvents(request, response);
+        return;
+      }
+
+      if (runEventsRoute) {
+        if (request.method !== "GET") {
+          sendJson(response, 405, {
+            error: "Methode de stream run non supportee."
+          });
+          return;
+        }
+
+        handleRunEvents({
+          lastEventId:
+            request.headers["last-event-id"] ||
+            requestUrl.searchParams.get("lastEventId"),
+          request,
+          response,
+          runId: runEventsRoute.runId
+        });
+        return;
+      }
+
+      if (runCancelRoute) {
+        if (request.method !== "POST") {
+          sendJson(response, 405, {
+            error: "Methode d'annulation run non supportee."
+          });
+          return;
+        }
+
+        handleRunCancel({
+          response,
+          runId: runCancelRoute.runId
+        });
+        return;
+      }
+
+      if (request.method === "POST" && requestUrl.pathname === "/api/runs") {
+        await handleCreateRun(request, response);
         return;
       }
 
@@ -48,13 +105,37 @@ function createWebServer({ config }) {
         return;
       }
 
+      if (messageRoute) {
+        if (request.method !== "POST") {
+          sendJson(response, 405, {
+            error: "Methode de message non supportee."
+          });
+          return;
+        }
+
+        await handleLegacyConversationMessage({
+          conversationId: messageRoute.conversationId,
+          request,
+          response
+        });
+        return;
+      }
+
+      if (
+        requestUrl.pathname === "/api/conversations" ||
+        requestUrl.pathname.startsWith("/api/conversations/")
+      ) {
+        await handleConversationsRoute({ request, requestUrl, response });
+        return;
+      }
+
       if (requestUrl.pathname.startsWith("/api/presets/")) {
         await handlePresetMutation({ request, requestUrl, response });
         return;
       }
 
       if (request.method === "POST" && requestUrl.pathname === "/api/start") {
-        await handleStart(request, response);
+        await handleCreateRun(request, response);
         return;
       }
 
@@ -73,34 +154,29 @@ function createWebServer({ config }) {
     }
   });
 
-  server.broadcastEvent = broadcastEvent;
+  server.requestTimeout = 0;
+  server.headersTimeout = 0;
+  server.keepAliveTimeout = 0;
+  server.broadcastEvent = broadcastDevEvent;
 
-  function handleEvents(request, response) {
+  function handleDevEvents(request, response) {
     response.writeHead(200, {
-      "Cache-Control": "no-cache",
+      "Cache-Control": "no-cache, no-transform",
       Connection: "keep-alive",
       "Content-Type": "text/event-stream",
       "X-Accel-Buffering": "no"
     });
 
-    clients.add(response);
-
+    devClients.add(response);
     sendToClient(response, {
       type: "hello",
       payload: {
-        running: isRunning
+        running: false
       }
     });
 
-    if (currentUi) {
-      sendToClient(response, {
-        type: "snapshot",
-        payload: currentUi.getSnapshot()
-      });
-    }
-
     request.on("close", () => {
-      clients.delete(response);
+      devClients.delete(response);
     });
   }
 
@@ -143,16 +219,72 @@ function createWebServer({ config }) {
     });
   }
 
-  async function handleStart(request, response) {
-    if (isRunning) {
-      sendJson(response, 409, {
-        error: "Une session est deja en cours."
-      });
-      return;
+  async function handleCreateRun(request, response) {
+    const input = await readJsonBody(request);
+    const prepared = await prepareRunInput(input);
+    const run = runManager.createRun({
+      conversationId: prepared.conversation.id,
+      payload: {
+        userMessage: prepared.userMessage
+      }
+    });
+    attachRunIdToPreparedTurn(prepared, run.id);
+
+    sendJson(response, 202, {
+      conversation: prepared.conversation.summary,
+      ok: true,
+      run: getPublicRun(run),
+      runId: run.id
+    });
+
+    executeRun(run.id, prepared).catch((error) => {
+      errorLog(`[run] erreur du run ${run.id}: ${error.message || error}`);
+    });
+  }
+
+  async function handleLegacyConversationMessage({ conversationId, request, response }) {
+    const input = await readJsonBody(request);
+    const prepared = await prepareRunInput({
+      ...input,
+      conversationId
+    });
+    const run = runManager.createRun({
+      conversationId: prepared.conversation.id,
+      payload: {
+        userMessage: prepared.userMessage
+      }
+    });
+    attachRunIdToPreparedTurn(prepared, run.id);
+
+    sendJson(response, 202, {
+      conversation: prepared.conversation.summary,
+      ok: true,
+      run: getPublicRun(run),
+      runId: run.id
+    });
+
+    executeRun(run.id, prepared).catch((error) => {
+      errorLog(`[run] erreur du run ${run.id}: ${error.message || error}`);
+    });
+  }
+
+  async function prepareRunInput(input) {
+    const conversationId = normalizeInitialRequest({
+      fallback: "",
+      value: input.conversationId
+    });
+    const userMessage = normalizeInitialRequest({
+      fallback: "",
+      value: input.userMessage || input.message || input.content || input.initialRequest
+    });
+
+    if (!conversationId) {
+      throw new TypeError("conversationId est requis pour creer un run.");
+    }
+    if (!userMessage) {
+      throw new TypeError("Le message utilisateur est requis pour creer un run.");
     }
 
-    const input = await readJsonBody(request);
-    const session = normalizeSession({ config, input });
     const layers = normalizeLayers({
       inputLayers: input.layers,
       sessionDefaults: config.sessionDefaults
@@ -160,76 +292,202 @@ function createWebServer({ config }) {
     const runtime = createRuntimeFromLayers(layers);
     validateRuntime(runtime);
 
+    const initialConversation = await conversationStore.getConversation(conversationId);
+    const shouldAppendUserMessage = shouldPersistRunUserMessage(
+      initialConversation,
+      userMessage
+    );
+    const userTurn = shouldAppendUserMessage
+      ? await conversationStore.appendMessage(conversationId, {
+          id: createUserMessageId(),
+          role: "user",
+          kind: "user",
+          agentName: "Utilisateur",
+          status: "complete",
+          title: "Message utilisateur",
+          content: userMessage
+        })
+      : null;
+    const conversation = await conversationStore.getConversation(conversationId);
+    const turn = prepareConversationTurn({
+      conversation,
+      rawUserMessage: userMessage,
+      userTurnId: userTurn?.id || "initial-request"
+    });
+    const session = normalizeSession({
+      config,
+      input: {
+        ...input,
+        initialRequest: conversation.initialRequest || userMessage
+      }
+    });
+
+    session.conversationId = conversation.id;
+    session.conversationTitle = conversation.title;
+    session.checkpointBaseIndex = Array.isArray(conversation.checkpoints)
+      ? conversation.checkpoints.length
+      : 0;
+    session.currentTask = turn.currentTask;
+    session.currentUserMessage = userMessage;
+    session.rootInitialRequest = conversation.initialRequest;
+    session.turn = turn;
+    session.userMessageId = userTurn?.id || "";
     session.slaveCount = runtime.slaveAgents.length;
     session.arbiterCount = runtime.arbiterAgents.length;
 
-    currentUi = createWebUi({
-      layers,
-      sendEvent: broadcast,
-      session
-    });
-    isRunning = true;
-
-    currentUi.render();
-    sendJson(response, 202, {
-      ok: true
+    logTurnDebug("turn_started", {
+      answerToUser: "",
+      conversation,
+      newCheckpointId: "",
+      retrievedChunks: 0,
+      session,
+      turn
     });
 
-    runSession({
+    return {
       ...runtime,
-      session
-    }).catch((error) => {
-      if (currentUi) {
-        currentUi.appendArbiter(`\n\nERREUR :\n${error.message}\n`);
-        currentUi.setStatus("Erreur detectee.");
-      }
+      conversation,
+      includeConversationHistory: true,
+      layers,
+      session,
+      shouldAppendUserMessage,
+      turn,
+      userMessage
+    };
+  }
+
+  async function executeRun(runId, prepared) {
+    const run = runManager.getRun(runId);
+
+    if (!run) {
+      return;
+    }
+
+    const signal = run.abortController.signal;
+    const ui = createWebUi({
+      conversation: toConversationUiMetadata(prepared.conversation),
+      conversationStore,
+      initialTurns: prepared.conversation.turns,
+      layers: prepared.layers,
+      sendEvent: (event) => {
+        runManager.emit(runId, event.type, event.payload);
+      },
+      session: prepared.session
     });
+
+    try {
+      throwIfAborted(signal);
+      ui.render();
+
+      throwIfAborted(signal);
+      await runSession({
+        ...prepared,
+        includeConversationHistory: prepared.includeConversationHistory,
+        runId,
+        signal,
+        ui
+      });
+    } catch (error) {
+      if (signal.aborted) {
+        debugLog(`[run] run annulé ${runId}`);
+        await ui.flushPersistence();
+        await ui.setConversationStatus("cancelled");
+        return;
+      }
+
+      errorLog(`[run] erreur du run ${runId}: ${error.message || error}`);
+      await ui.flushPersistence();
+      await ui.setConversationStatus("error");
+      runManager.emit(runId, "run_error", {
+        message: error.message || String(error)
+      });
+    }
   }
 
   async function runSession({
     arbiterAgents,
+    conversation,
+    includeConversationHistory = true,
     retrievalLayers,
+    runId,
     session,
-    slaveAgents
+    signal,
+    slaveAgents,
+    ui
   }) {
     try {
-      currentUi.setStatus("Preparation du contexte documentaire...");
+      throwIfAborted(signal);
+      ui.setStatus("Preparation du contexte documentaire...");
+      runManager.emit(runId, "retrieval_started", {
+        message: "Preparation du contexte documentaire..."
+      });
+
       const retrieval = await buildCombinedRetrievalContext({
-        dataDirectory: config.dataDirectory,
-        layers: retrievalLayers,
-        query: session.initialRequest
+        config,
+          excludeConversationId: session.conversationId,
+          includeConversationHistory,
+          dataDirectory: config.dataDirectory,
+          layers: retrievalLayers,
+          query: buildTurnRetrievalQuery(session.turn)
+        });
+
+      throwIfAborted(signal);
+      runManager.emit(runId, "retrieval_done", {
+        chunksSelected: retrieval.chunksSelected,
+        errorCount: retrieval.errorCount
       });
       emitRetrievalTurns({
         retrieval,
-        retrievalLayers
+        ui
       });
 
-      currentUi.setStatus("Verification d'Ollama...");
+      const turnContext = buildTurnContext({
+        conversation,
+        retrievedChunks: retrieval.context,
+        turn: session.turn
+      });
 
+      logTurnDebug("turn_context_ready", {
+        answerToUser: "",
+        conversation,
+        newCheckpointId: "",
+        retrievedChunks: retrieval.chunksSelected,
+        session,
+        turn: session.turn
+      });
+
+      ui.setStatus("Verification d'Ollama...");
       await checkOllamaModels({
         baseUrl: config.ollamaBaseUrl,
         models: getRequiredModels({
           arbiterAgents,
           config
-        })
+        }),
+        signal
       });
+      throwIfAborted(signal);
 
       const stats = await runDebate({
         arbiterAgents,
         config,
-        referenceContext: retrieval.context,
+        referenceContext: mergeReferenceContexts(turnContext, retrieval.context),
         retrieveReferenceContext: async (query) => {
+          throwIfAborted(signal);
           const nextRetrieval = await buildCombinedRetrievalContext({
+            config,
+            excludeConversationId: session.conversationId,
+            includeConversationHistory,
             dataDirectory: config.dataDirectory,
             layers: retrievalLayers,
             query
           });
 
-          return nextRetrieval.context;
+          return mergeReferenceContexts(turnContext, nextRetrieval.context);
         },
         session,
+        signal,
         slaveAgents,
-        ui: currentUi
+        ui
       });
 
       const retrievalSummary = retrieval.chunksSelected > 0
@@ -239,31 +497,88 @@ function createWebServer({ config }) {
         ? `, ${retrieval.errorCount} avertissements retrieval`
         : "";
 
-      currentUi.setStatus(
+      ui.setStatus(
         `Debat termine. ${stats.agentResponseCount} reponses agents, ${stats.arbitrationCount} arbitrages${retrievalSummary}${retrievalWarnings}.`
       );
-    } finally {
-      isRunning = false;
-      broadcast({
-        type: "running",
-        payload: {
-          running: false
-        }
+      await ui.flushPersistence();
+      await ui.setConversationStatus("complete");
+
+      const updatedConversation = await conversationStore.getConversation(session.conversationId);
+
+      logTurnDebug("turn_completed", {
+        answerToUser: getLatestAnswerToUser(updatedConversation),
+        conversation: updatedConversation,
+        newCheckpointId: getLatestCheckpointId(updatedConversation),
+        retrievedChunks: retrieval.chunksSelected,
+        session,
+        turn: session.turn
       });
+
+      runManager.emit(runId, "run_done", {
+        conversation: updatedConversation,
+        stats
+      });
+    } catch (error) {
+      if (signal?.aborted) {
+        throw error;
+      }
+
+      await ui.flushPersistence();
+      await ui.setConversationStatus("error");
+      throw error;
     }
   }
 
-  function emitRetrievalTurns({ retrieval, retrievalLayers }) {
+  function handleRunEvents({ lastEventId, request, response, runId }) {
+    response.writeHead(200, {
+      "Cache-Control": "no-cache, no-transform",
+      Connection: "keep-alive",
+      "Content-Type": "text/event-stream",
+      "X-Accel-Buffering": "no"
+    });
+    response.flushHeaders?.();
+
+    const attached = runManager.attachClient(runId, response, lastEventId);
+
+    if (!attached) {
+      response.write("event: run_error\n");
+      response.write(`data: ${JSON.stringify({
+        id: "0",
+        type: "run_error",
+        runId,
+        data: {
+          message: "Run introuvable."
+        },
+        createdAt: new Date().toISOString()
+      })}\n\n`);
+      response.end();
+      return;
+    }
+
+    request.on("close", () => {
+      runManager.detachClient(runId, response);
+    });
+  }
+
+  function handleRunCancel({ response, runId }) {
+    const cancelled = runManager.cancelRun(runId);
+
+    sendJson(response, cancelled ? 200 : 404, {
+      cancelled
+    });
+  }
+
+  function emitRetrievalTurns({ retrieval, ui }) {
     if (
-      !retrievalLayers.length ||
-      !currentUi ||
-      typeof currentUi.addRetrievalTurn !== "function"
+      !retrieval.layerResults.length ||
+      !ui ||
+      typeof ui.addRetrievalTurn !== "function"
     ) {
       return;
     }
 
     retrieval.layerResults.forEach(({ layer, result }, index) => {
-      currentUi.addRetrievalTurn({
+      ui.addRetrievalTurn({
         index: index + 1,
         layer,
         result,
@@ -272,14 +587,8 @@ function createWebServer({ config }) {
     });
   }
 
-  function broadcast(event) {
-    for (const client of clients) {
-      sendToClient(client, event);
-    }
-  }
-
-  function broadcastEvent(event) {
-    for (const client of clients) {
+  function broadcastDevEvent(event) {
+    for (const client of devClients) {
       sendToClient(client, event);
     }
   }
@@ -287,7 +596,80 @@ function createWebServer({ config }) {
   return server;
 }
 
-async function buildCombinedRetrievalContext({ dataDirectory, layers, query }) {
+function attachRunIdToPreparedTurn(prepared, runId) {
+  if (prepared?.turn) {
+    prepared.turn.runId = runId;
+  }
+  if (prepared?.session?.turn) {
+    prepared.session.runId = runId;
+    prepared.session.turn.runId = runId;
+  }
+}
+
+function buildTurnRetrievalQuery(turn) {
+  return normalizeInitialRequest({
+    fallback: "",
+    value: turn?.currentTask || turn?.rawUserMessage
+  });
+}
+
+function logTurnDebug(label, {
+  answerToUser,
+  conversation,
+  newCheckpointId,
+  retrievedChunks,
+  session,
+  turn
+}) {
+  debugLog(`[context] ${label}`, {
+    agentResponsesLength: Array.isArray(turn?.agentResponses)
+      ? turn.agentResponses.length
+      : 0,
+    answerLength: getTextLength(answerToUser),
+    conversationId: conversation?.id || session?.conversationId || "",
+    conversationTurnIndex: turn?.conversationTurnIndex || 0,
+    currentTaskLength: getTextLength(turn?.currentTask),
+    initialRequestLength: getTextLength(conversation?.initialRequest || session?.initialRequest),
+    latestCheckpointId: turn?.latestCheckpointId || "",
+    newCheckpointId: newCheckpointId || "",
+    rawUserMessageLength: getTextLength(turn?.rawUserMessage),
+    retrievedChunks
+  });
+}
+
+function getLatestAnswerToUser(conversation) {
+  const messages = Array.isArray(conversation?.messages)
+    ? conversation.messages
+    : Array.isArray(conversation?.turns)
+      ? conversation.turns
+      : [];
+
+  return [...messages]
+    .reverse()
+    .find((message) => message.kind === "answer")?.content || "";
+}
+
+function getLatestCheckpointId(conversation) {
+  const checkpoints = Array.isArray(conversation?.checkpoints)
+    ? conversation.checkpoints
+    : [];
+
+  return checkpoints.at(-1)?.id || "";
+}
+
+function getTextLength(value) {
+  const text = typeof value === "string" ? value.trim() : "";
+  return text.length;
+}
+
+async function buildCombinedRetrievalContext({
+  config,
+  dataDirectory,
+  excludeConversationId,
+  includeConversationHistory = true,
+  layers,
+  query
+}) {
   const results = await Promise.all(
     layers.map(async (layer) => ({
       layer,
@@ -298,6 +680,19 @@ async function buildCombinedRetrievalContext({ dataDirectory, layers, query }) {
       })
     }))
   );
+  const conversationLayerResult = includeConversationHistory
+    ? await buildConversationLayerResult({
+        config,
+        dataDirectory,
+        excludeConversationId,
+        query
+      })
+    : null;
+
+  if (conversationLayerResult) {
+    results.unshift(conversationLayerResult);
+  }
+
   const contexts = [];
   let chunksSelected = 0;
   let errorCount = 0;
@@ -317,6 +712,33 @@ async function buildCombinedRetrievalContext({ dataDirectory, layers, query }) {
     context: contexts.join("\n\n"),
     layerResults: results
   };
+}
+
+async function buildConversationLayerResult({
+  config,
+  dataDirectory,
+  excludeConversationId,
+  query
+}) {
+  if (!config.conversationHistory || config.conversationHistory.enabled === false) {
+    return null;
+  }
+
+  const result = await buildConversationRetrievalContext({
+    conversationDirectory: config.conversationDirectory,
+    dataDirectory,
+    excludeConversationId,
+    options: config.conversationHistory,
+    query
+  });
+  const stats = result.result.stats;
+  const hasSignal =
+    stats.filesIndexed > 0 ||
+    stats.chunksIndexed > 0 ||
+    stats.chunksSelected > 0 ||
+    stats.errors.length > 0;
+
+  return hasSignal ? result : null;
 }
 
 async function serveStatic({ publicDir, requestUrl, response }) {
@@ -351,6 +773,119 @@ async function serveStatic({ publicDir, requestUrl, response }) {
 
     throw error;
   }
+}
+
+function parseRunEventsRoute(requestUrl) {
+  const pathParts = splitPath(requestUrl);
+
+  if (
+    pathParts.length === 4 &&
+    pathParts[0] === "api" &&
+    pathParts[1] === "runs" &&
+    pathParts[3] === "events"
+  ) {
+    return {
+      runId: pathParts[2]
+    };
+  }
+
+  return null;
+}
+
+function parseRunCancelRoute(requestUrl) {
+  const pathParts = splitPath(requestUrl);
+
+  if (
+    pathParts.length === 4 &&
+    pathParts[0] === "api" &&
+    pathParts[1] === "runs" &&
+    pathParts[3] === "cancel"
+  ) {
+    return {
+      runId: pathParts[2]
+    };
+  }
+
+  return null;
+}
+
+function parseConversationMessageRoute(requestUrl) {
+  const pathParts = splitPath(requestUrl);
+
+  if (
+    pathParts.length === 4 &&
+    pathParts[0] === "api" &&
+    pathParts[1] === "conversations" &&
+    pathParts[3] === "messages"
+  ) {
+    return {
+      conversationId: pathParts[2]
+    };
+  }
+
+  return null;
+}
+
+function splitPath(requestUrl) {
+  return requestUrl.pathname
+    .split("/")
+    .filter(Boolean)
+    .map((part) => decodeURIComponent(part));
+}
+
+function shouldPersistRunUserMessage(conversation, userMessage) {
+  const hasUserMessage = conversation.messages.some(
+    (message) => message.role === "user" || message.kind === "user"
+  );
+  const normalizedInitialRequest = normalizeInitialRequest({
+    fallback: "",
+    value: conversation.initialRequest
+  });
+  const normalizedUserMessage = normalizeInitialRequest({
+    fallback: "",
+    value: userMessage
+  });
+
+  return hasUserMessage || normalizedInitialRequest !== normalizedUserMessage;
+}
+
+function mergeReferenceContexts(...contexts) {
+  return contexts
+    .filter((context) => typeof context === "string" && context.trim())
+    .map((context) => context.trim())
+    .join("\n\n");
+}
+
+function createUserMessageId() {
+  return `user-${Date.now()}-${Math.random().toString(16).slice(2, 10)}`;
+}
+
+function toConversationUiMetadata(conversation) {
+  return {
+    ...conversation.summary,
+    checkpoints: conversation.checkpoints,
+    initialRequest: conversation.initialRequest
+  };
+}
+
+function getPublicRun(run) {
+  return {
+    id: run.id,
+    conversationId: run.conversationId,
+    status: run.status,
+    createdAt: run.createdAt,
+    updatedAt: run.updatedAt
+  };
+}
+
+function throwIfAborted(signal) {
+  if (!signal?.aborted) {
+    return;
+  }
+
+  const error = new Error("Run annulé.");
+  error.name = "AbortError";
+  throw error;
 }
 
 function getPublicConfig(config) {
@@ -443,6 +978,10 @@ async function readJsonBody(request) {
 }
 
 function getErrorStatus(error) {
+  if (error && error.code === "ENOENT") {
+    return 404;
+  }
+
   if (error instanceof SyntaxError || error instanceof TypeError) {
     return 400;
   }

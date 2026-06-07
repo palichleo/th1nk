@@ -6,7 +6,7 @@
   "scripts": {
     "start": "node src/main.js",
     "dev": "node --watch --watch-preserve-output src/dev.js",
-    "check": "node --check src/main.js && node --check src/agents.js && node --check src/config.js && node --check src/debateOrchestrator.js && node --check src/debateState.js && node --check src/layers.js && node --check src/ollamaClient.js && node --check src/presetStore.js && node --check src/prompts.js && node --check src/retrievalLayer.js && node --check src/public/app.js && node --check src/sessionInput.js && node --check src/terminalUi.js && node --check src/webServer.js && node --check src/webUi.js",
+    "check": "node --check src/main.js && node --check src/agents.js && node --check src/config.js && node --check src/debateOrchestrator.js && node --check src/debateState.js && node --check src/layers.js && node --check src/logger.js && node --check src/normalize.js && node --check src/ollamaClient.js && node --check src/presetStore.js && node --check src/prompts.js && node --check src/retrievalLayer.js && node --check src/server/retrieval/conversationIndexer.js && node --check src/server/routes/conversations.js && node --check src/server/runs/runManager.js && node --check src/server/storage/conversationMarkdownStore.js && node --check src/server/storage/conversationParser.js && node --check src/server/storage/turnContext.js && node --check src/public/app.js && node --check src/sessionInput.js && node --check src/terminalUi.js && node --check src/webServer.js && node --check src/webUi.js",
     "test": "npm run check"
   },
   "keywords": [],
