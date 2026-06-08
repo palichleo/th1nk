@@ -1,0 +1,316 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Th1nk - Super agent</title>
+    <link rel="stylesheet" href="/app.css">
+  </head>
+  <body>
+    <div id="appLayout" class="app-layout">
+      <aside class="chat-sidebar" aria-label="Navigation">
+        <div class="sidebar-brand">
+          <div class="brand-lockup">
+            <h1>Th<span class="brand-accent">1</span>nk</h1>
+            <p>Studio multi-agent local</p>
+          </div>
+          <button
+            id="sidebarToggleButton"
+            class="sidebar-toggle icon-button"
+            type="button"
+            aria-label="Replier la sidebar"
+            aria-expanded="true"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+              <path d="M15 6 9 12l6 6"></path>
+            </svg>
+          </button>
+        </div>
+
+        <button
+          id="newConversationButton"
+          class="new-chat-button"
+          type="button"
+          aria-label="Nouvelle conversation"
+          title="Nouvelle conversation"
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <path d="M12 5v14"></path>
+            <path d="M5 12h14"></path>
+            <path d="M7 5h7a5 5 0 0 1 5 5v7a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2Z"></path>
+          </svg>
+        </button>
+
+        <nav class="chat-history" aria-label="Historique">
+          <p class="sidebar-label">Historique</p>
+          <div id="historyList" class="history-list">
+            <p class="empty-state">Chargement...</p>
+          </div>
+        </nav>
+
+        <div class="sidebar-footer">
+          <p id="statusText" class="status-text" role="status">Initialisation...</p>
+          <div class="sidebar-controls" aria-label="Paramètres de session">
+            <label class="slider-field">
+              <span>Tours avant arbitrage</span>
+              <strong id="roundsValue">3</strong>
+              <input type="range" id="roundsSlider" min="1" max="20" value="3" step="1">
+            </label>
+            <label class="slider-field">
+              <span>Cycles d'arbitrage</span>
+              <strong id="arbitrationsValue">2</strong>
+              <input type="range" id="arbitrationsSlider" min="1" max="20" value="2" step="1">
+            </label>
+            <div class="sidebar-actions">
+              <button id="themeButton" class="icon-button" type="button" aria-label="Changer de thème"></button>
+              <button id="configToggleButton" class="quiet-button" type="button">Configurer les layers</button>
+            </div>
+          </div>
+        </div>
+      </aside>
+
+      <main class="chat-main is-conversation-empty">
+        <section id="conversationScroll" class="conversation-scroll" aria-label="Conversation">
+          <div id="conversationWorkspace" class="conversation-list"></div>
+        </section>
+
+        <footer class="chat-composer">
+          <div class="composer-inner">
+            <label class="sr-only" for="requestInput">Message</label>
+            <div class="composer-box">
+              <textarea id="requestInput" rows="1" placeholder="Envoyer un message à th1nk"></textarea>
+              <button id="startButton" class="send-button" type="button" aria-label="Envoyer">↑</button>
+            </div>
+          </div>
+        </footer>
+      </main>
+    </div>
+
+    <!-- Dialog layers config — même logique stylistique que name-dialog -->
+    <dialog id="configDialog" class="config-dialog">
+      <div class="config-dialog__inner">
+        <header class="config-dialog__header">
+          <div>
+            <p class="eyebrow">Workspace</p>
+            <h2>Layers &amp; configuration</h2>
+          </div>
+          <button id="closeConfigButton" class="icon-button" type="button" aria-label="Fermer">×</button>
+        </header>
+
+        <div class="config-dialog__toolbar">
+          <div class="toolbar__group">
+            <button id="addChatbotsLayerButton" class="primary-button" type="button">+ Layer chatbots</button>
+            <button id="addRetrievalLayerButton" class="secondary-button" type="button">+ Layer retrieval</button>
+          </div>
+          <div class="toolbar__group">
+            <button id="openPresetsButton" class="secondary-button" type="button">Bibliotheque de presets</button>
+            <button id="resetWorkspaceButton" class="quiet-button" type="button">Reinitialiser</button>
+          </div>
+        </div>
+
+        <section id="layersWorkspace" class="layers-workspace" aria-label="Layers" tabindex="0"></section>
+      </div>
+    </dialog>
+
+    <dialog id="presetsDrawer" class="drawer" hidden aria-labelledby="presetsTitle">
+      <button class="drawer__backdrop" type="button" data-close-drawer aria-label="Fermer"></button>
+      <div class="drawer__panel">
+        <header class="drawer__header">
+          <div>
+            <p class="eyebrow">Presets disque</p>
+            <h2 id="presetsTitle">Bibliotheque</h2>
+          </div>
+          <button id="closePresetsButton" class="icon-button" type="button" aria-label="Fermer">×</button>
+        </header>
+        <div class="preset-tabs" role="tablist">
+          <button class="preset-tab is-active" type="button" data-preset-kind="layers">Layers</button>
+          <button class="preset-tab" type="button" data-preset-kind="bots">Bots</button>
+        </div>
+        <div id="presetsList" class="presets-list"></div>
+      </div>
+    </dialog>
+
+    <dialog id="presetNameDialog" class="name-dialog">
+      <form id="presetNameForm" method="dialog">
+        <p class="eyebrow">Enregistrer sur disque</p>
+        <h2>Nom du preset</h2>
+        <label>
+          <span>Nom</span>
+          <input id="presetNameInput" type="text" maxlength="100" autocomplete="off" required>
+        </label>
+        <div class="dialog-actions">
+          <button class="quiet-button" value="cancel" type="button" id="cancelPresetNameButton">Annuler</button>
+          <button class="primary-button" type="submit">Enregistrer</button>
+        </div>
+      </form>
+    </dialog>
+
+    <template id="chatbotsLayerTemplate">
+      <article class="layer-card" data-layer-type="chatbots">
+        <header class="layer-card__header">
+          <div class="layer-card__identity">
+            <span class="layer-index"></span>
+            <div>
+              <p class="layer-kind">Chatbots</p>
+              <input class="layer-name" type="text" maxlength="100" aria-label="Nom du layer">
+            </div>
+          </div>
+          <div class="layer-card__actions">
+            <div class="layer-order-actions" aria-label="Ordre d'exécution">
+              <button class="icon-button move-layer-up" type="button" aria-label="Monter ce layer">↑</button>
+              <button class="icon-button move-layer-down" type="button" aria-label="Descendre ce layer">↓</button>
+            </div>
+
+            <label class="switch">
+              <input class="layer-enabled" type="checkbox">
+              <span>Actif</span>
+            </label>
+
+            <button class="quiet-button save-layer-preset" type="button">Enregistrer preset</button>
+            <button class="danger-button delete-layer" type="button">Supprimer</button>
+          </div>
+        </header>
+        <div class="layer-config">
+          <label class="compact-field">
+            <span>Fonction</span>
+            <select class="layer-purpose">
+              <option value="debate">Débat</option>
+              <option value="arbitrate">Arbitrage</option>
+            </select>
+          </label>
+          <div class="layer-config__actions">
+            <button class="quiet-button load-bot-preset" type="button">Charger un preset bot</button>
+            <button class="secondary-button add-bot" type="button">+ Ajouter un bot</button>
+          </div>
+        </div>
+        <div class="bots-grid"></div>
+      </article>
+    </template>
+
+    <template id="retrievalLayerTemplate">
+      <article class="layer-card" data-layer-type="retrieval">
+        <header class="layer-card__header">
+          <div class="layer-card__identity">
+            <span class="layer-index"></span>
+            <div>
+              <p class="layer-kind">Retrieval</p>
+              <input class="layer-name" type="text" maxlength="100" aria-label="Nom du layer">
+            </div>
+          </div>
+          <div class="layer-card__actions">
+            <div class="layer-order-actions" aria-label="Ordre d'exécution">
+              <button class="icon-button move-layer-up" type="button" aria-label="Monter ce layer">↑</button>
+              <button class="icon-button move-layer-down" type="button" aria-label="Descendre ce layer">↓</button>
+            </div>
+
+            <label class="switch">
+              <input class="layer-enabled" type="checkbox">
+              <span>Actif</span>
+            </label>
+
+            <button class="quiet-button save-layer-preset" type="button">Enregistrer preset</button>
+            <button class="danger-button delete-layer" type="button">Supprimer</button>
+          </div>
+        </header>
+        <div class="retrieval-grid">
+          <label class="field field--wide">
+            <span>Répertoire à indexer</span>
+            <input class="retrieval-directory" type="text" placeholder="C:\documents\projet">
+          </label>
+          <label class="field">
+            <span>Taille des chunks</span>
+            <input class="retrieval-chunk-size" type="number" min="1" step="1">
+          </label>
+          <label class="field">
+            <span>Chevauchement</span>
+            <input class="retrieval-chunk-overlap" type="number" min="0" step="1">
+          </label>
+          <label class="field">
+            <span>Résultats top K</span>
+            <input class="retrieval-top-k" type="number" min="1" step="1">
+          </label>
+        </div>
+      </article>
+    </template>
+
+    <template id="customLayerTemplate">
+      <article class="layer-card" data-layer-type="custom">
+        <header class="layer-card__header">
+          <div class="layer-card__identity">
+            <span class="layer-index"></span>
+            <div>
+              <p class="layer-kind">Layer custom</p>
+              <input class="layer-name" type="text" maxlength="100" aria-label="Nom du layer">
+            </div>
+          </div>
+          <div class="layer-card__actions">
+            <div class="layer-order-actions" aria-label="Ordre d'exécution">
+              <button class="icon-button move-layer-up" type="button" aria-label="Monter ce layer">↑</button>
+              <button class="icon-button move-layer-down" type="button" aria-label="Descendre ce layer">↓</button>
+            </div>
+
+            <label class="switch">
+              <input class="layer-enabled" type="checkbox">
+              <span>Actif</span>
+            </label>
+
+            <button class="quiet-button save-layer-preset" type="button">Enregistrer preset</button>
+            <button class="danger-button delete-layer" type="button">Supprimer</button>
+          </div>
+        </header>
+        <div class="retrieval-grid">
+          <label class="field">
+            <span>Type du layer</span>
+            <input class="custom-layer-type" type="text" autocomplete="off">
+          </label>
+          <label class="field field--wide">
+            <span>Configuration JSON</span>
+            <textarea class="custom-layer-config" rows="8" spellcheck="false"></textarea>
+          </label>
+        </div>
+      </article>
+    </template>
+
+    <template id="botTemplate">
+      <article class="bot-card">
+        <header class="bot-card__header">
+          <input class="bot-name" type="text" maxlength="100" aria-label="Nom du bot">
+          <div class="bot-card__actions">
+            <button class="icon-button save-bot-preset" type="button" aria-label="Enregistrer ce bot comme preset">◎</button>
+            <button class="icon-button delete-bot" type="button" aria-label="Supprimer ce bot">×</button>
+          </div>
+        </header>
+        <label class="field">
+          <span>System prompt</span>
+          <textarea class="bot-system-prompt" rows="5" placeholder="Instructions système complètes..."></textarea>
+        </label>
+      </article>
+    </template>
+
+    <template id="conversationTemplate">
+      <div class="chat-turn">
+        <article class="message message--user">
+          <div class="message-bubble user-message"></div>
+        </article>
+        <article class="message message--assistant">
+          <div class="assistant-message">
+            <div class="reasoning-list"></div>
+            <div class="final-answer markdown-body"></div>
+          </div>
+        </article>
+      </div>
+    </template>
+
+    <template id="thinkingTurnTemplate">
+      <details class="reasoning-block" open>
+        <summary>
+          <span class="reasoning-block__title"></span>
+          <span class="reasoning-block__meta"></span>
+        </summary>
+        <pre></pre>
+      </details>
+    </template>
+
+    <script src="/app.js"></script>
+  </body>
+</html>
