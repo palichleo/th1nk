@@ -3,6 +3,7 @@
 
   const WORKSPACE_STORAGE_KEY = "th1nk.layersWorkspace.v1";
   const THEME_STORAGE_KEY = "th1nk.theme";
+  const SIDEBAR_COLLAPSED_STORAGE_KEY = "th1nk.sidebarCollapsed.v1";
   const DEFAULT_RETRIEVAL_CONFIG = {
     directory: "",
     chunkSize: 900,
@@ -19,11 +20,13 @@
   const elements = {
     addChatbotsLayerButton: document.querySelector("#addChatbotsLayerButton"),
     addRetrievalLayerButton: document.querySelector("#addRetrievalLayerButton"),
+    appLayout: document.querySelector("#appLayout"),
     arbitrationsSlider: document.querySelector("#arbitrationsSlider"),
     arbitrationsValue: document.querySelector("#arbitrationsValue"),
     cancelPresetNameButton: document.querySelector("#cancelPresetNameButton"),
     closePresetsButton: document.querySelector("#closePresetsButton"),
     closeConfigButton: document.querySelector("#closeConfigButton"),
+    chatMain: document.querySelector(".chat-main"),
     configDialog: document.querySelector("#configDialog"),
     configToggleButton: document.querySelector("#configToggleButton"),
     conversationScroll: document.querySelector("#conversationScroll"),
@@ -41,6 +44,7 @@
     resetWorkspaceButton: document.querySelector("#resetWorkspaceButton"),
     roundsSlider: document.querySelector("#roundsSlider"),
     roundsValue: document.querySelector("#roundsValue"),
+    sidebarToggleButton: document.querySelector("#sidebarToggleButton"),
     startButton: document.querySelector("#startButton"),
     statusText: document.querySelector("#statusText"),
     themeButton: document.querySelector("#themeButton")
@@ -65,7 +69,8 @@
       layers: []
     },
     runEventSource: null,
-    running: false
+    running: false,
+    sidebarCollapsed: false
   };
 
   init();
@@ -73,6 +78,8 @@
   async function init() {
     bindStaticControls();
     applyTheme(readStorage(THEME_STORAGE_KEY) || preferredTheme());
+    setSidebarCollapsed(readStorage(SIDEBAR_COLLAPSED_STORAGE_KEY) === true, { persist: false });
+    syncConversationUiState();
 
     try {
       state.config = await fetchJson("/api/config");
@@ -80,6 +87,7 @@
       state.layers = loadWorkspaceLayers();
       renderLayers();
       renderConversationPreview();
+      resizeRequestInput();
       await loadConversations();
       setStatus("Prêt.");
     } catch (error) {
@@ -97,10 +105,13 @@
       elements.arbitrationsValue.textContent = elements.arbitrationsSlider.value;
       persistWorkspace();
     });
-    elements.requestInput.addEventListener("input", persistWorkspace);
+    elements.requestInput.addEventListener("input", handleRequestInput);
     elements.requestInput.addEventListener("keydown", handleComposerKeydown);
     elements.startButton.addEventListener("click", startSession);
     elements.newConversationButton.addEventListener("click", startNewConversation);
+    elements.sidebarToggleButton.addEventListener("click", () => {
+      setSidebarCollapsed(!state.sidebarCollapsed);
+    });
     elements.addChatbotsLayerButton.addEventListener("click", () => addLayer("chatbots"));
     elements.addRetrievalLayerButton.addEventListener("click", () => addLayer("retrieval"));
     elements.resetWorkspaceButton.addEventListener("click", resetWorkspace);
@@ -111,6 +122,7 @@
         closePresets();
       }
     });
+    elements.presetsDrawer.addEventListener("close", handlePresetsClosed);
     document.querySelectorAll("[data-preset-kind]").forEach((button) => {
       button.addEventListener("click", () => selectPresetKind(button.dataset.presetKind));
     });
@@ -140,7 +152,7 @@
       }
     });
     window.addEventListener("keydown", (event) => {
-      if (event.key === "Escape" && !elements.presetsDrawer.hidden) {
+      if (event.key === "Escape" && isPresetsOpen()) {
         closePresets();
       }
     });
@@ -167,6 +179,7 @@
       stored?.initialRequest,
       normalizeText(defaults.initialRequest, "")
     );
+    resizeRequestInput();
   }
 
   function configureSlider(slider, { min, max, value }) {
@@ -467,6 +480,7 @@
     state.activeConversationId = null;
     state.reasoningBlocks.clear();
     elements.requestInput.value = "";
+    resizeRequestInput();
     persistWorkspace();
     renderConversation();
     renderHistory();
@@ -519,6 +533,52 @@
     }
   }
 
+  function handleRequestInput() {
+    resizeRequestInput();
+    persistWorkspace();
+  }
+
+  function resizeRequestInput() {
+    const textarea = elements.requestInput;
+    const maxHeight = getRequestInputMaxHeight(textarea);
+
+    textarea.style.height = "auto";
+    const height = Math.min(textarea.scrollHeight, maxHeight);
+    textarea.style.height = `${height}px`;
+    textarea.style.overflowY = textarea.scrollHeight > maxHeight ? "auto" : "hidden";
+  }
+
+  function getRequestInputMaxHeight(textarea) {
+    const styles = window.getComputedStyle(textarea);
+    const fontSize = Number.parseFloat(styles.fontSize) || 16;
+    const lineHeight = Number.parseFloat(styles.lineHeight) || fontSize * 1.45;
+    const paddingTop = Number.parseFloat(styles.paddingTop) || 0;
+    const paddingBottom = Number.parseFloat(styles.paddingBottom) || 0;
+
+    return Math.ceil((lineHeight * 5) + paddingTop + paddingBottom);
+  }
+
+  function setSidebarCollapsed(collapsed, { persist = true } = {}) {
+    state.sidebarCollapsed = Boolean(collapsed);
+    elements.appLayout.classList.toggle("is-sidebar-collapsed", state.sidebarCollapsed);
+    elements.sidebarToggleButton.setAttribute("aria-expanded", String(!state.sidebarCollapsed));
+    elements.sidebarToggleButton.setAttribute(
+      "aria-label",
+      state.sidebarCollapsed ? "Ouvrir la sidebar" : "Replier la sidebar"
+    );
+    elements.sidebarToggleButton.title = state.sidebarCollapsed
+      ? "Ouvrir la sidebar"
+      : "Replier la sidebar";
+
+    if (persist) {
+      writeStorage(SIDEBAR_COLLAPSED_STORAGE_KEY, state.sidebarCollapsed);
+    }
+  }
+
+  function syncConversationUiState() {
+    elements.chatMain.classList.toggle("is-conversation-empty", !state.conversation);
+  }
+
   function updateLayerMoveButtons(card, index) {
     const upButton = card.querySelector(".move-layer-up");
     const downButton = card.querySelector(".move-layer-down");
@@ -538,6 +598,7 @@
     state.layers = normalizeLayers(state.config?.defaultLayers);
     const defaults = state.config?.sessionDefaults || {};
     elements.requestInput.value = normalizeText(defaults.initialRequest, "");
+    resizeRequestInput();
     configureSlider(elements.roundsSlider, {
       min: elements.roundsSlider.min,
       max: elements.roundsSlider.max,
@@ -661,6 +722,7 @@
       state.activeConversationId = conversation.id;
       state.finalAnswerText = "";
       elements.requestInput.value = "";
+      resizeRequestInput();
       persistWorkspace();
       renderConversation();
       upsertHistory(response.conversation?.summary || response.conversation);
@@ -759,12 +821,27 @@
   async function openPresets({ kind = state.presetKind, targetLayerId = null } = {}) {
     state.presetTargetLayerId = targetLayerId;
     elements.presetsDrawer.hidden = false;
+    if (!elements.presetsDrawer.open) {
+      elements.presetsDrawer.showModal();
+    }
     await selectPresetKind(kind);
   }
 
   function closePresets() {
+    if (elements.presetsDrawer.open) {
+      elements.presetsDrawer.close();
+      return;
+    }
+    handlePresetsClosed();
+  }
+
+  function handlePresetsClosed() {
     state.presetTargetLayerId = null;
     elements.presetsDrawer.hidden = true;
+  }
+
+  function isPresetsOpen() {
+    return !elements.presetsDrawer.hidden && elements.presetsDrawer.open;
   }
 
   async function selectPresetKind(kind) {
@@ -928,7 +1005,7 @@
       });
       closePresetNameDialog();
       setStatus(`Preset "${name}" enregistré.`);
-      if (!elements.presetsDrawer.hidden && state.presetKind === pending.kind) {
+      if (isPresetsOpen() && state.presetKind === pending.kind) {
         await loadPresets(pending.kind);
       }
     } catch (error) {
@@ -995,6 +1072,7 @@
     }
 
     elements.requestInput.value = "";
+    resizeRequestInput();
     persistWorkspace();
     renderConversation();
     setRunning(true);
@@ -1022,6 +1100,7 @@
       console.error(error);
       setRunning(false);
       elements.requestInput.value = userMessage;
+      resizeRequestInput();
       if (isContinuation && state.conversation) {
         state.conversation.turns = state.conversation.turns.filter(
           (turn) => !turn.localOnly
@@ -1334,11 +1413,9 @@
     state.reasoningBlocks.clear();
     state.conversationNodes = null;
     elements.conversationWorkspace.replaceChildren();
+    syncConversationUiState();
 
     if (!state.conversation) {
-      elements.conversationWorkspace.append(createEmptyState(
-        "Envoyez un message pour démarrer la conversation."
-      ));
       return;
     }
 

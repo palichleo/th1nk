@@ -21,6 +21,14 @@ const DEFAULT_CHUNK_SIZE = 1200;
 const DEFAULT_CHUNK_OVERLAP = 200;
 const DEFAULT_TOP_K = 5;
 
+const WARNING_DEFINITIONS = {
+  directory_not_found: "Dossier introuvable",
+  permission_denied: "Permission refusée",
+  unsupported_files: "Aucun fichier supporté",
+  read_error: "Erreur de lecture",
+  empty_index: "Index vide"
+};
+
 const indexCache = new Map();
 
 async function buildRetrievalContext({
@@ -44,30 +52,64 @@ async function buildRetrievalContext({
     cacheHit: false,
     databaseHit: false,
     durationMs: 0,
-    errors: []
+    errors: [],
+    warnings: []
   };
 
   if (!configuredDirectory) {
-    return emptyResult(baseStats, startedAt, "layer.config.directory is required.");
+    return emptyResult(
+      baseStats,
+      startedAt,
+      createWarning({
+        message: "Aucun repertoire n'est configure pour ce layer retrieval.",
+        type: "directory_not_found"
+      })
+    );
   }
 
   const directory = path.resolve(configuredDirectory);
   baseStats.directory = directory;
 
   try {
-    const directoryStat = await fs.stat(directory);
+    let directoryStat;
+
+    try {
+      directoryStat = await fs.stat(directory);
+    } catch (error) {
+      return emptyResult(
+        baseStats,
+        startedAt,
+        warningFromDirectoryError(error, directory)
+      );
+    }
 
     if (!directoryStat.isDirectory()) {
       return emptyResult(
         baseStats,
         startedAt,
-        `Retrieval path is not a directory: ${directory}`
+        createWarning({
+          message: "Le chemin configure n'est pas un dossier.",
+          target: directory,
+          type: "directory_not_found"
+        })
       );
     }
 
     const scan = await scanDirectory(directory, {
       excludeRelativePaths
     });
+    const scanWarnings = [...scan.warnings];
+
+    if (scan.files.length === 0 && scanWarnings.length === 0) {
+      scanWarnings.push(
+        createWarning({
+          message: `Aucun fichier avec une extension supportee (${[...SUPPORTED_EXTENSIONS].join(", ")}) n'a ete trouve.`,
+          target: directory,
+          type: "unsupported_files"
+        })
+      );
+    }
+
     const signature = createFileSignature(scan.files);
     const cacheKey = createCacheKey(directory, options);
     let index = indexCache.get(cacheKey);
@@ -99,7 +141,17 @@ async function buildRetrievalContext({
       indexCache.set(cacheKey, index);
     }
 
-    const errors = [...scan.errors, ...index.errors];
+    const warnings = [...scanWarnings, ...index.warnings];
+    if (index.chunks.length === 0) {
+      warnings.push(
+        createWarning({
+          message: "Aucun chunk exploitable n'a ete cree depuis les fichiers lus.",
+          target: directory,
+          type: "empty_index"
+        })
+      );
+    }
+
     const matches = selectMatches(index, query, options.topK);
     const sources = matches.map(({ chunk, score }) => ({
       path: chunk.relativePath,
@@ -118,11 +170,20 @@ async function buildRetrievalContext({
         chunksIndexed: index.chunks.length,
         chunksSelected: matches.length,
         durationMs: Date.now() - startedAt,
-        errors
+        errors: warnings.map(formatWarning),
+        warnings
       }
     };
   } catch (error) {
-    return emptyResult(baseStats, startedAt, formatError(error, directory));
+    return emptyResult(
+      baseStats,
+      startedAt,
+      createWarning({
+        message: formatError(error, directory),
+        target: directory,
+        type: "read_error"
+      })
+    );
   }
 }
 
@@ -141,7 +202,7 @@ function normalizeOptions(config) {
 
 async function scanDirectory(rootDirectory, { excludeRelativePaths = [] } = {}) {
   const files = [];
-  const errors = [];
+  const warnings = [];
   const excludedPaths = new Set(
     excludeRelativePaths.map((filePath) => toPortablePath(String(filePath || "")))
   );
@@ -152,7 +213,7 @@ async function scanDirectory(rootDirectory, { excludeRelativePaths = [] } = {}) 
     try {
       entries = await fs.readdir(directory, { withFileTypes: true });
     } catch (error) {
-      errors.push(formatError(error, directory));
+      warnings.push(warningFromReadError(error, directory));
       return;
     }
 
@@ -190,7 +251,7 @@ async function scanDirectory(rootDirectory, { excludeRelativePaths = [] } = {}) 
           mtimeMs: stat.mtimeMs
         });
       } catch (error) {
-        errors.push(formatError(error, absolutePath));
+        warnings.push(warningFromReadError(error, absolutePath));
       }
     }
   }
@@ -198,7 +259,7 @@ async function scanDirectory(rootDirectory, { excludeRelativePaths = [] } = {}) 
   await visit(rootDirectory);
   files.sort((left, right) => compareStrings(left.relativePath, right.relativePath));
 
-  return { files, errors };
+  return { files, warnings };
 }
 
 function createFileSignature(files) {
@@ -233,7 +294,7 @@ async function loadPersistedIndex({ cacheKey, signature, vectorDatabaseDirectory
         vector: new Map(chunk.vector || [])
       })),
       documentFrequency: new Map(serialized.documentFrequency || []),
-      errors: []
+      warnings: []
     };
   } catch {
     return null;
@@ -282,7 +343,7 @@ function resolveVectorDatabaseDirectory(dataDirectory) {
 
 async function buildIndex({ files, options, signature }) {
   const chunks = [];
-  const errors = [];
+  const warnings = [];
   let fileCount = 0;
 
   for (const file of files) {
@@ -292,7 +353,7 @@ async function buildIndex({ files, options, signature }) {
       content = await fs.readFile(file.absolutePath, "utf8");
       fileCount++;
     } catch (error) {
-      errors.push(formatError(error, file.absolutePath));
+      warnings.push(warningFromReadError(error, file.absolutePath));
       continue;
     }
 
@@ -334,7 +395,7 @@ async function buildIndex({ files, options, signature }) {
     fileCount,
     chunks: indexedChunks,
     documentFrequency,
-    errors
+    warnings
   };
 }
 
@@ -499,14 +560,19 @@ function formatContext(matches) {
   ].join("\n\n");
 }
 
-function emptyResult(baseStats, startedAt, errorMessage) {
+function emptyResult(baseStats, startedAt, warningOrWarnings) {
+  const warnings = []
+    .concat(warningOrWarnings || [])
+    .filter((warning) => warning && typeof warning === "object");
+
   return {
     context: "",
     sources: [],
     stats: {
       ...baseStats,
       durationMs: Date.now() - startedAt,
-      errors: errorMessage ? [errorMessage] : []
+      errors: warnings.map(formatWarning),
+      warnings
     }
   };
 }
@@ -521,6 +587,60 @@ function compareStrings(left, right) {
 
 function toPortablePath(filePath) {
   return filePath.split(path.sep).join("/");
+}
+
+function createWarning({ message = "", target = "", type }) {
+  const normalizedType = Object.hasOwn(WARNING_DEFINITIONS, type)
+    ? type
+    : "read_error";
+
+  return {
+    type: normalizedType,
+    label: WARNING_DEFINITIONS[normalizedType],
+    target: target ? String(target) : "",
+    message: message ? String(message) : ""
+  };
+}
+
+function warningFromDirectoryError(error, directory) {
+  const type = getPermissionDenied(error)
+    ? "permission_denied"
+    : error && (error.code === "ENOENT" || error.code === "ENOTDIR")
+      ? "directory_not_found"
+      : "read_error";
+
+  return createWarning({
+    message: formatError(error, directory),
+    target: directory,
+    type
+  });
+}
+
+function warningFromReadError(error, target) {
+  return createWarning({
+    message: formatError(error, target),
+    target,
+    type: getPermissionDenied(error) ? "permission_denied" : "read_error"
+  });
+}
+
+function getPermissionDenied(error) {
+  return error && (error.code === "EACCES" || error.code === "EPERM");
+}
+
+function formatWarning(warning) {
+  const parts = [warning.label];
+  const message = warning.message || "";
+
+  if (warning.target && !message.includes(warning.target)) {
+    parts.push(warning.target);
+  }
+
+  if (message) {
+    parts.push(message);
+  }
+
+  return parts.join(" - ");
 }
 
 function formatError(error, target) {

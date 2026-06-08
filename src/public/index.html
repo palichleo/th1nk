@@ -3,18 +3,43 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>th1nk - Super agent</title>
+    <title>Th1nk - Super agent</title>
     <link rel="stylesheet" href="/app.css">
   </head>
   <body>
-    <div class="app-layout">
+    <div id="appLayout" class="app-layout">
       <aside class="chat-sidebar" aria-label="Navigation">
         <div class="sidebar-brand">
-          <h1>th1nk</h1>
-          <p>Studio multi-agent local</p>
+          <div class="brand-lockup">
+            <h1>Th<span class="brand-accent">1</span>nk</h1>
+            <p>Studio multi-agent local</p>
+          </div>
+          <button
+            id="sidebarToggleButton"
+            class="sidebar-toggle icon-button"
+            type="button"
+            aria-label="Replier la sidebar"
+            aria-expanded="true"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+              <path d="M15 6 9 12l6 6"></path>
+            </svg>
+          </button>
         </div>
 
-        <button id="newConversationButton" class="new-chat-button" type="button">Nouvelle conversation</button>
+        <button
+          id="newConversationButton"
+          class="new-chat-button"
+          type="button"
+          aria-label="Nouvelle conversation"
+          title="Nouvelle conversation"
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <path d="M12 5v14"></path>
+            <path d="M5 12h14"></path>
+            <path d="M7 5h7a5 5 0 0 1 5 5v7a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2Z"></path>
+          </svg>
+        </button>
 
         <nav class="chat-history" aria-label="Historique">
           <p class="sidebar-label">Historique</p>
@@ -44,11 +69,9 @@
         </div>
       </aside>
 
-      <main class="chat-main">
+      <main class="chat-main is-conversation-empty">
         <section id="conversationScroll" class="conversation-scroll" aria-label="Conversation">
-          <div id="conversationWorkspace" class="conversation-list">
-            <p class="empty-state">Envoyez un message pour démarrer la conversation.</p>
-          </div>
+          <div id="conversationWorkspace" class="conversation-list"></div>
         </section>
 
         <footer class="chat-composer">
@@ -89,7 +112,7 @@
       </div>
     </dialog>
 
-    <aside id="presetsDrawer" class="drawer" hidden aria-labelledby="presetsTitle">
+    <dialog id="presetsDrawer" class="drawer" hidden aria-labelledby="presetsTitle">
       <button class="drawer__backdrop" type="button" data-close-drawer aria-label="Fermer"></button>
       <div class="drawer__panel">
         <header class="drawer__header">
@@ -105,7 +128,7 @@
         </div>
         <div id="presetsList" class="presets-list"></div>
       </div>
-    </aside>
+    </dialog>
 
     <dialog id="presetNameDialog" class="name-dialog">
       <form id="presetNameForm" method="dialog">

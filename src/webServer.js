@@ -433,6 +433,7 @@ function createWebServer({ config }) {
 
       throwIfAborted(signal);
       runManager.emit(runId, "retrieval_done", {
+        chunksIndexed: retrieval.chunksIndexed,
         chunksSelected: retrieval.chunksSelected,
         errorCount: retrieval.errorCount
       });
@@ -440,6 +441,20 @@ function createWebServer({ config }) {
         retrieval,
         ui
       });
+
+      const retrievalBlocker = getRetrievalBlocker(retrieval);
+      if (retrievalBlocker) {
+        ui.setStatus(retrievalBlocker.message);
+        await ui.flushPersistence();
+        await ui.setConversationStatus("error");
+        runManager.emit(runId, "run_error", {
+          message: retrievalBlocker.message,
+          retrieval: {
+            warnings: retrievalBlocker.warnings
+          }
+        });
+        return;
+      }
 
       const turnContext = buildTurnContext({
         conversation,
@@ -670,7 +685,7 @@ async function buildCombinedRetrievalContext({
   layers,
   query
 }) {
-  const results = await Promise.all(
+  const userLayerResults = await Promise.all(
     layers.map(async (layer) => ({
       layer,
       result: await buildRetrievalContext({
@@ -680,6 +695,7 @@ async function buildCombinedRetrievalContext({
       })
     }))
   );
+  const results = [...userLayerResults];
   const conversationLayerResult = includeConversationHistory
     ? await buildConversationLayerResult({
         config,
@@ -694,24 +710,158 @@ async function buildCombinedRetrievalContext({
   }
 
   const contexts = [];
+  const userFailures = [];
+  const userWarnings = [];
   let chunksSelected = 0;
+  let chunksIndexed = 0;
   let errorCount = 0;
+  let userChunksIndexed = 0;
 
   for (const { layer, result } of results) {
-    chunksSelected += result.stats.chunksSelected;
-    errorCount += result.stats.errors.length;
+    const stats = result.stats || {};
+    const warnings = getRetrievalWarnings(stats);
+
+    chunksSelected += stats.chunksSelected || 0;
+    chunksIndexed += stats.chunksIndexed || 0;
+    errorCount += warnings.length;
 
     if (result.context) {
       contexts.push(`# ${layer.name}\n\n${result.context}`);
     }
   }
 
+  for (const { layer, result } of userLayerResults) {
+    const stats = result.stats || {};
+    const layerChunksIndexed = stats.chunksIndexed || 0;
+    const warnings = getRetrievalWarnings(stats);
+
+    userChunksIndexed += layerChunksIndexed;
+    userWarnings.push(
+      ...warnings.map((warning) => ({
+        ...warning,
+        layerId: layer.id,
+        layerName: layer.name
+      }))
+    );
+
+    if (layerChunksIndexed === 0) {
+      userFailures.push({
+        layerId: layer.id,
+        layerName: layer.name,
+        warnings
+      });
+    }
+  }
+
   return {
     chunksSelected,
+    chunksIndexed,
     errorCount,
     context: contexts.join("\n\n"),
-    layerResults: results
+    layerResults: results,
+    userFailures,
+    userChunksIndexed,
+    userRetrievalLayerCount: userLayerResults.length,
+    userWarnings
   };
+}
+
+function getRetrievalBlocker(retrieval) {
+  const failures = Array.isArray(retrieval.userFailures)
+    ? retrieval.userFailures
+    : [];
+
+  if (!retrieval.userRetrievalLayerCount || failures.length === 0) {
+    return null;
+  }
+
+  const warnings = failures.flatMap((failure) =>
+    failure.warnings.map((warning) => ({
+      ...warning,
+      layerId: failure.layerId,
+      layerName: failure.layerName
+    }))
+  );
+  const warningSummary = summarizeRetrievalWarnings(warnings);
+  const failedLayers = failures
+    .map((failure) => normalizeInitialRequest({
+      fallback: "retriever utilisateur",
+      value: failure.layerName
+    }))
+    .join(", ");
+  const message = [
+    `Debat bloque : aucun chunk n'a ete indexe par ${failedLayers}.`,
+    warningSummary ? `Avertissements : ${warningSummary}.` : ""
+  ].filter(Boolean).join(" ");
+
+  return {
+    message,
+    warnings
+  };
+}
+
+function summarizeRetrievalWarnings(warnings) {
+  const labels = [];
+  const seen = new Set();
+
+  for (const warning of warnings) {
+    const layerName = normalizeInitialRequest({
+      fallback: "",
+      value: warning.layerName
+    });
+    const label = normalizeInitialRequest({
+      fallback: "Avertissement retrieval",
+      value: warning.label
+    });
+    const key = `${layerName}\0${label}`;
+
+    if (seen.has(key)) {
+      continue;
+    }
+
+    seen.add(key);
+    labels.push(layerName ? `${layerName}: ${label}` : label);
+  }
+
+  return labels.slice(0, 5).join(", ");
+}
+
+function getRetrievalWarnings(stats) {
+  if (Array.isArray(stats?.warnings) && stats.warnings.length) {
+    return stats.warnings
+      .filter((warning) => warning && typeof warning === "object")
+      .map((warning) => ({
+        label: normalizeInitialRequest({
+          fallback: "Avertissement retrieval",
+          value: warning.label
+        }),
+        message: normalizeInitialRequest({
+          fallback: "",
+          value: warning.message
+        }),
+        target: normalizeInitialRequest({
+          fallback: "",
+          value: warning.target
+        }),
+        type: normalizeInitialRequest({
+          fallback: "retrieval_warning",
+          value: warning.type
+        })
+      }));
+  }
+
+  if (Array.isArray(stats?.errors)) {
+    return stats.errors
+      .filter((error) => typeof error === "string" && error.trim())
+      .map((error) => ({
+        label: "Avertissement retrieval",
+        message: error.trim(),
+        target: "",
+        type: "retrieval_warning"
+      }));
+  }
+
+  return [];
 }
 
 async function buildConversationLayerResult({

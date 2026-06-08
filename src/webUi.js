@@ -98,7 +98,7 @@ function createWebUi({
 
     const stats = result?.stats || {};
     const directory = stats.directory || layer.config?.directory || "Répertoire non défini";
-    const errorCount = Array.isArray(stats.errors) ? stats.errors.length : 0;
+    const warnings = normalizeRetrievalWarnings(stats);
     const turn = {
       id: `turn-${++turnSequence}`,
       layerId: layer.id,
@@ -111,7 +111,8 @@ function createWebUi({
         `Répertoire : ${directory}`,
         `Chunks sélectionnés : ${stats.chunksSelected || 0}`,
         `Chunks indexés : ${stats.chunksIndexed || 0}`,
-        `Avertissements : ${errorCount}`
+        `Avertissements : ${warnings.length}`,
+        ...formatRetrievalWarnings(warnings)
       ].join("\n"),
       status: "complete"
     };
@@ -429,6 +430,53 @@ function getInitialTurnSequence(turns) {
 
     return Number.isInteger(value) && value > highest ? value : highest;
   }, 0);
+}
+
+function normalizeRetrievalWarnings(stats) {
+  if (Array.isArray(stats?.warnings) && stats.warnings.length) {
+    return stats.warnings
+      .filter((warning) => warning && typeof warning === "object")
+      .map((warning) => ({
+        label: normalizeText(warning.label, "Avertissement retrieval"),
+        message: normalizeText(warning.message, ""),
+        target: normalizeText(warning.target, "")
+      }));
+  }
+
+  if (Array.isArray(stats?.errors)) {
+    return stats.errors
+      .filter((error) => typeof error === "string" && error.trim())
+      .map((error) => ({
+        label: "Avertissement retrieval",
+        message: error.trim(),
+        target: ""
+      }));
+  }
+
+  return [];
+}
+
+function formatRetrievalWarnings(warnings) {
+  if (!warnings.length) {
+    return [];
+  }
+
+  return [
+    "",
+    "Details des avertissements :",
+    ...warnings.map((warning) => {
+      const details = [
+        warning.target && !warning.message.includes(warning.target)
+          ? warning.target
+          : "",
+        warning.message
+      ]
+        .filter(Boolean)
+        .join(" - ");
+
+      return details ? `- ${warning.label} : ${details}` : `- ${warning.label}`;
+    })
+  ];
 }
 
 module.exports = {
